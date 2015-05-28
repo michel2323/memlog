@@ -7,6 +7,8 @@
 #include <limits.h>
 #include <string.h>
 
+#include <sys/time.h>
+#include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
@@ -31,6 +33,8 @@ static void record_init() {
   char log_name[PATH_MAX];
   snprintf(log_name, PATH_MAX, "%s.%d.memory.log_file", u.nodename, getpid());
   log_file = fopen(log_name, "w");
+  if (!log_file)
+    fprintf(stderr, "fopen failed for '%s': %m\n", log_name);
 }
 
 __attribute__((__destructor__))
@@ -43,20 +47,53 @@ static void record_cleanup() {
 }
 
 static void print_context(unw_context_t *context) {
-  unw_cursor_t cursor;
-  if (unw_init_local(&cursor, context))
+  struct rusage usage;
+  if (getrusage(RUSAGE_SELF, &usage)) {
+    fprintf(stderr, "getrusage failed: %m\n");
     return;
+  }
 
-  while (unw_step(&cursor) > 0) {
-    unw_proc_info_t pip;
-    if (unw_get_proc_info(&cursor, &pip))
-      return;
+  fprintf(log_file, "\t%ld.%06ld %ld", usage.ru_utime.tv_sec,
+          usage.ru_utime.tv_usec, usage.ru_maxrss);
 
+  int r;
+  unw_cursor_t cursor;
+  if ((r = unw_init_local(&cursor, context))) {
+    fprintf(stderr, "unw_init_local failed: %s [%d]\n",
+            unw_strerror(r), r);
+    return;
+  }
+
+  while ((r = unw_step(&cursor)) > 0) {
     unw_word_t off;
     char proc_name[PATH_MAX];
     if (unw_get_proc_name(&cursor, proc_name, PATH_MAX, &off)) {
       off = 0;
       strcpy(proc_name, "?");
+    }
+
+    unw_proc_info_t pip;
+    if ((r = unw_get_proc_info(&cursor, &pip))) {
+      // unw_get_proc_info is not supported on some platforms (ppc and ppc64,
+      // for example), so we need to try harder...
+      if (r == -UNW_EINVAL) {
+        unw_word_t pc;
+        if ((r = unw_get_reg(&cursor, UNW_REG_IP, &pc))) {
+          fprintf(stderr, "unw_get_reg UNW_REG_IP failed: %s [%d]\n",
+                  unw_strerror(r), r);
+          return;
+        }
+
+        if ((r = unw_get_proc_info_by_ip(unw_local_addr_space, pc, &pip, NULL))) {
+          fprintf(stderr, "unw_get_proc_info_by_ip failed: %s [%d]\n",
+                  unw_strerror(r), r);
+          return;
+        }
+      } else {
+        fprintf(stderr, "unw_get_proc_info failed: %s [%d]\n",
+                unw_strerror(r), r);
+        return;
+      }
     }
 
     const char *file_name;
@@ -70,6 +107,10 @@ static void print_context(unw_context_t *context) {
     fprintf(log_file, "\t%s (%s+0x%x) [%p]", file_name, proc_name, (int) off,
             (void *) (pip.start_ip + off));
   }
+
+  if (r < 0)
+    fprintf(stderr, "unw_step failed: %s [%d]\n",
+            unw_strerror(r), r);
 }
 
 static void record_malloc(size_t size, void *ptr, unw_context_t *uc) {

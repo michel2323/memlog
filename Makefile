@@ -3,7 +3,7 @@ CFLAGS = -O3 -g
 
 UNW_HOME = ${HOME}/install/libunwind
 CPPFLAGS = -I$(UNW_HOME)/include
-LDFLAGS = -L$(UNW_HOME)/lib64 -Wl,-rpath,$(UNW_HOME)/lib64 -lunwind -lpthread
+LDFLAGS = -L$(UNW_HOME)/lib64 -Wl,-rpath,$(UNW_HOME)/lib64 -lunwind -lpthread -ldl
 
 all: memlog.so memlog.a
 
