@@ -14,11 +14,61 @@ if (! -f $memlog_fn) {
 
 open(MEMLOG, $memlog_fn) || die "Can't open $memlog_fn: $!";
 
+# The first step is to determine the high-water mark.
+my $max_rss = 0;
+foreach my $line (<MEMLOG>) {
+  chomp($line);
+  my @parts = split(/\t/, $line);
+
+  my $op = shift(@parts);
+  my $state = shift(@parts);
+
+  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+  if ($max_rss < $then_max_rss) {
+    $max_rss = $then_max_rss;
+  }
+}
+
+seek(MEMLOG, 0, 0);
+
+# Scan the log for malloc/free pairings. We're interested only in active
+# allocations at the time when the rss reaches the final maxrss.
+my $max_rss_time = 0;
+my %malloc_lines;
+foreach my $line (<MEMLOG>) {
+  chomp($line);
+  my @parts = split(/\t/, $line);
+
+  my $op = shift(@parts);
+  my $state = shift(@parts);
+
+  if ($op =~ /^M:/) {
+    my ($size, $ptr) = ($op =~ /^M: (\d+) 0x(\w+)/);
+    $malloc_lines{$ptr} = $line;
+  } elsif ($op =~ /^F:/) {
+    my ($ptr) = ($op =~ /^F: 0x(\w+)/);
+    delete $malloc_lines{$ptr};
+  } else {
+    next;
+  }
+
+  # If we've reached the max rss, we've seen all we need to see.
+  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+  $max_rss_time = $time;
+  if ($then_max_rss == $max_rss) {
+    last;
+  }
+}
+
+close(MEMLOG);
+
+# Convert maxrss, currently in KB, to bytes.
+$max_rss *= 1024;
+
 my $total_size = 0;
 my %roots;
 my %all_nodes;
-foreach my $line (<MEMLOG>) {
-  chomp($line);
+foreach my $line (values %malloc_lines) {
   my @parts = split(/\t/, $line);
 
   my $op = shift(@parts);
@@ -30,7 +80,7 @@ foreach my $line (<MEMLOG>) {
   }
 
   my ($size, $ptr) = ($op =~ /^M: (\d+) 0x(\w+)/);
-  my ($time, $maxrss, $tid) = split(/\s+/, $state);
+  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
 
   $total_size += $size;
 
@@ -87,8 +137,6 @@ foreach my $line (<MEMLOG>) {
   }
 }
 
-close(MEMLOG);
-
 my $dot_fn = "$out_dir/" . basename($memlog_fn) . ".dot";
 my $ps_fn = "$out_dir/" . basename($memlog_fn) . ".ps";
 my $pdf_fn = "$out_dir/" . basename($memlog_fn) . ".pdf";
@@ -108,7 +156,8 @@ sub format_bytes($) {
   return sprintf("%.3f $sizes[$i]", $size);
 }
 
-printf DOT ("digraph \"memlog %s\" {\n", format_bytes($total_size));
+printf DOT ("digraph \"memlog %s (maxrss = %s after %s s)\" {\n",
+            format_bytes($total_size), format_bytes($max_rss), $max_rss_time);
 print DOT ("size=\"8,11\";\n");
 print DOT ("node [width=0.375,height=0.25];\n");
 
