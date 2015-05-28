@@ -2,10 +2,20 @@
 use strict;
 use File::Basename;
 
+my $memlog_fn = $ARGV[0];
+my $out_dir = $ARGV[1] || '.';
+
+if (! -f $memlog_fn) {
+  print "Usage: $0 <memlog file> [<output directory>]\n";
+  exit 1;
+}
+
+open(MEMLOG, $memlog_fn) || die "Can't open $memlog_fn: $!";
+
 my $total_size = 0;
 my %roots;
 my %all_nodes;
-foreach my $line ( <STDIN> ) {
+foreach my $line (<MEMLOG>) {
   chomp($line);
   my @parts = split(/\t/, $line);
 
@@ -75,6 +85,14 @@ foreach my $line ( <STDIN> ) {
   }
 }
 
+close(MEMLOG);
+
+my $dot_fn = "$out_dir/" . basename($memlog_fn) . ".dot";
+my $ps_fn = "$out_dir/" . basename($memlog_fn) . ".ps";
+my $pdf_fn = "$out_dir/" . basename($memlog_fn) . ".pdf";
+
+open(DOT, ">$dot_fn") || die "Can't open $dot_fn: $!";
+
 sub format_bytes($) {
   my @sizes = qw( B KB MB GB TB PB );
   my $size = $_[0];
@@ -88,9 +106,9 @@ sub format_bytes($) {
   return sprintf("%.3f $sizes[$i]", $size);
 }
 
-printf("digraph \"memlog %s\" {\n", format_bytes($total_size));
-print("size=\"8,11\";\n");
-print("node [width=0.375,height=0.25];\n");
+printf DOT ("digraph \"memlog %s\" {\n", format_bytes($total_size));
+print DOT ("size=\"8,11\";\n");
+print DOT ("node [width=0.375,height=0.25];\n");
 
 my %cached_names;
 sub get_name($) {
@@ -160,7 +178,7 @@ foreach my $pc (keys %all_nodes) {
     $fs = 50.0 * (abs($local_size * 1.0 / $total_size))**0.125;
   }
 
-  printf("N%s [label=\"%s\\n%s\", shape=box, fontsize=%.1f%s];\n",
+  printf DOT ("N%s [label=\"%s\\n%s\", shape=box, fontsize=%.1f%s];\n",
     $pc, $name, format_bytes($local_size), $fs);
 }
 
@@ -185,10 +203,17 @@ foreach my $pc (keys %all_nodes) {
 
     my $fs = 40.0 * $frac**0.125;
 
-    printf("N%s -> N%s [label=\"%s\", weight=%d, style=\"%s\", fontsize=%.1f];\n",
+    printf DOT ("N%s -> N%s [label=\"%s\", weight=%d, style=\"%s\", fontsize=%.1f];\n",
       $pc, $cpc, format_bytes($child_size), $weight, $style, $fs);
   }
 }
 
-print("}\n");
+print DOT ("}\n");
+
+close(DOT);
+
+system("dot -Tps2 < '$dot_fn' > '$ps_fn'");
+system("ps2pdf '$ps_fn' '$pdf_fn'");
+
+exit 0;
 
