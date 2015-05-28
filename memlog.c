@@ -34,7 +34,7 @@ static void record_init() {
   uname(&u);
 
   char log_name[PATH_MAX];
-  snprintf(log_name, PATH_MAX, "%s.%d.memory.log_file", u.nodename, getpid());
+  snprintf(log_name, PATH_MAX, "%s.%d.memlog", u.nodename, getpid());
   log_file = fopen(log_name, "w");
   if (!log_file)
     fprintf(stderr, "fopen failed for '%s': %m\n", log_name);
