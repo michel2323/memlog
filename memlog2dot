@@ -5,6 +5,8 @@ use File::Basename;
 my $memlog_fn = $ARGV[0];
 my $out_dir = $ARGV[1] || '.';
 
+my $print_raw_proc_name = 0;
+
 if (! -f $memlog_fn) {
   print "Usage: $0 <memlog file> [<output directory>]\n";
   exit 1;
@@ -151,9 +153,9 @@ sub get_name($) {
     $ret .= $proc_name . '\n';
   }
 
-  $ret .= basename($node->{'file_name'});
-  if ($node->{'proc_name'} ne '?') {
-    $ret .= ' (' . $node->{'proc_name'} . '+0x' . $node->{'off'} . ')';
+  $ret .= $node->{'file_name'};
+  if ($print_raw_proc_name and $node->{'proc_name'} ne '?') {
+    $ret .= '\n' . $node->{'proc_name'} . '+0x' . $node->{'off'};
   }
 
   $cached_names{$pc} = $ret;
