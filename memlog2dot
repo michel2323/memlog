@@ -83,11 +83,11 @@ sub format_bytes($) {
     ++$i;
   }
 
-  return sprintf("%.3f$sizes[$i]", $size);
+  return sprintf("%.3f $sizes[$i]", $size);
 }
 
 printf("digraph \"memlog %s\" {\n", format_bytes($total_size));
-print("size=\"8,11\"\n");
+print("size=\"8,11\";\n");
 print("node [width=0.375,height=0.25];\n");
 
 my %cached_names;
@@ -120,6 +120,12 @@ sub get_name($) {
     chomp($func);
 
     $ret .= $func . '\n' . $loc . '\n';
+  } elsif ($node->{'proc_name'} ne '?') {
+    my $proc_name = $node->{'proc_name'};
+    $proc_name = `c++filt '$proc_name'`;
+    chomp($proc_name);
+
+    $ret .= $proc_name . '\n';
   }
 
   $ret .= basename($node->{'file_name'});
@@ -131,14 +137,21 @@ sub get_name($) {
   return $ret;
 }
 
+my $skip_frac = 0.01;
+my %skipped;
+
 foreach my $node (@all_nodes) {
   my $name = get_name($node);
 
   my $local_size = $node->{'size'};
+  if ($local_size * 1.0 / $total_size < $skip_frac) {
+    $skipped{$node->{'pc'}} = 1;
+    next;
+  }
 
   my $fs = 8.0;
   if ($local_size > 0) {
-    $fs = 50.0 * sqrt(abs($local_size * 1.0 / $total_size));
+    $fs = 50.0 * (abs($local_size * 1.0 / $total_size))**0.125;
   }
 
   printf("N%s [label=\"%s\\n%s\", shape=box,fontsize=%.1f%s];\n",
@@ -147,13 +160,20 @@ foreach my $node (@all_nodes) {
 
 foreach my $node (@all_nodes) {
   my $local_size = $node->{'size'};
+  if ($skipped{$node->{'pc'}}) {
+    next;
+  }
 
   foreach my $cpc (keys %{$node->{'child_sizes'}}) {
+    if ($skipped{$cpc}) {
+      next;
+    }
+
     my $child_size = $node->{'child_sizes'}->{$cpc};
     my $frac = $child_size * 1.0 / $local_size;
 
-    my $weight = 100.0 * $frac;
-    my $style = sprintf("setlinewidth(%f)", 3.0 * $frac);
+    my $weight = 100.0 * sqrt($frac);
+    my $style = sprintf("setlinewidth(%f)", 3.0 * sqrt($frac));
 
     printf("N%s -> N%s [label=\"%s\", weight=%d, style=\"%s\"];\n",
       $node->{'pc'}, $cpc, format_bytes($child_size), $weight, $style);
