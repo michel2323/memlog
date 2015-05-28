@@ -67,6 +67,7 @@ static void print_context(void *caller) {
   int num_pcs = backtrace(pcs, 1024);
 
   int found_caller = 0;
+  caller =  __builtin_extract_return_addr(caller);
   for (int pci = 0; pci < num_pcs; ++pci) {
     intptr_t pc = (intptr_t) pcs[pci];
 
