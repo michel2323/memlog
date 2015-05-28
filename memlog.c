@@ -26,6 +26,10 @@
 FILE *log_file = NULL;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// The malloc hook might use functions that call malloc, and we need to make
+// sure this does not cause an infinite loop.
+static __thread int in_malloc = 0;
+
 __attribute__((__constructor__))
 static void record_init() {
   struct utsname u;
@@ -42,6 +46,10 @@ __attribute__((__destructor__))
 static void record_cleanup() {
   if (!log_file)
     return;
+
+  // These functions might call free, but we're shutting down, so don't try to
+  // unwind the stack from here...
+  in_malloc = 1;
 
   (void) fflush(log_file);
   (void) fclose(log_file);
@@ -66,6 +74,53 @@ static void print_context(unw_context_t *context) {
   }
 
   while ((r = unw_step(&cursor)) > 0) {
+    unw_word_t pc;
+    if ((r = unw_get_reg(&cursor, UNW_REG_IP, &pc))) {
+      fprintf(stderr, "unw_get_reg UNW_REG_IP failed: %s [%d]\n",
+              unw_strerror(r), r);
+      return;
+    }
+
+    if (!pc)
+      break;
+
+    unw_word_t off, relpc;
+    const char *proc_name;
+    const char *file_name;
+    Dl_info dlinfo;
+    if (dladdr((void *) pc, &dlinfo) && dlinfo.dli_fname &&
+        *dlinfo.dli_fname) {
+      unw_word_t saddr = (unw_word_t) dlinfo.dli_saddr;
+      if (saddr) {
+#if defined(__powerpc64__) && !defined(__powerpc64le__)
+        // On PPC64 ELFv1, the symbol address points to the function descriptor, not
+        // the actual starting address.
+        saddr = *(unw_word_t*) saddr;
+#endif
+
+        off = pc - saddr;
+        relpc = pc - ((unw_word_t) dlinfo.dli_fbase);
+      } else {
+        off = 0;
+        relpc = 0;
+      }
+
+      proc_name = dlinfo.dli_sname;
+      if (!proc_name)
+        proc_name = "?";
+
+      file_name = dlinfo.dli_fname;
+    } else {
+      off = pc;
+      relpc = pc;
+      proc_name = "?";
+      file_name = "?";
+    }
+
+    fprintf(log_file, "\t%s (%s+0x%x) [0x%lx (0x%lx)]", file_name, proc_name, (int) off,
+            (long) pc, (long) relpc);
+
+#if 0
     unw_word_t off;
     char proc_name[PATH_MAX];
     if (unw_get_proc_name(&cursor, proc_name, PATH_MAX, &off)) {
@@ -113,6 +168,7 @@ static void print_context(unw_context_t *context) {
 
     fprintf(log_file, "\t%s (%s+0x%x) [%p]", file_name, proc_name, (int) off,
             (void *) (pip.start_ip + off));
+#endif
   }
 
   if (r < 0 && r != -UNW_ENOINFO)
@@ -157,10 +213,6 @@ extern void *__libc_realloc(void *ptr, size_t size);
 extern void *__libc_calloc(size_t nmemb, size_t size);
 extern void *__libc_memalign(size_t boundary, size_t size);
 extern void __libc_free(void *ptr);
-
-// The malloc hook might use functions that call malloc, and we need to make
-// sure this does not cause an infinite loop.
-static __thread int in_malloc = 0;
 
 void *malloc(size_t size) {
   if (in_malloc)
