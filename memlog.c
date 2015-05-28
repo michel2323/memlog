@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include <execinfo.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -73,6 +74,11 @@ static void print_context(unw_context_t *context) {
     return;
   }
 
+  void *pcs[1024];
+  int num_pcs = backtrace(pcs, 1024);
+  for (int pci = 0; pci < num_pcs; ++pci) {
+    unw_word_t pc = (unw_word_t) pcs[pci];
+#if 0
   while ((r = unw_step(&cursor)) > 0) {
     unw_word_t pc;
     if ((r = unw_get_reg(&cursor, UNW_REG_IP, &pc))) {
@@ -80,6 +86,7 @@ static void print_context(unw_context_t *context) {
               unw_strerror(r), r);
       return;
     }
+#endif
 
     if (!pc)
       break;
