@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/types.h>
@@ -53,8 +54,8 @@ static void print_context(unw_context_t *context) {
     return;
   }
 
-  fprintf(log_file, "\t%ld.%06ld %ld", usage.ru_utime.tv_sec,
-          usage.ru_utime.tv_usec, usage.ru_maxrss);
+  fprintf(log_file, "\t%ld.%06ld %ld %ld", usage.ru_utime.tv_sec,
+          usage.ru_utime.tv_usec, usage.ru_maxrss, syscall(SYS_gettid));
 
   int r;
   unw_cursor_t cursor;
@@ -85,11 +86,17 @@ static void print_context(unw_context_t *context) {
         }
 
         if ((r = unw_get_proc_info_by_ip(unw_local_addr_space, pc, &pip, NULL))) {
+          if (r == -UNW_ENOINFO)
+            break; // the cursor is now invalid; must break here.
+
           fprintf(stderr, "unw_get_proc_info_by_ip failed: %s [%d]\n",
                   unw_strerror(r), r);
           return;
         }
       } else {
+        if (r == -UNW_ENOINFO)
+          break; // the cursor is now invalid; must break here.
+
         fprintf(stderr, "unw_get_proc_info failed: %s [%d]\n",
                 unw_strerror(r), r);
         return;
@@ -108,7 +115,7 @@ static void print_context(unw_context_t *context) {
             (void *) (pip.start_ip + off));
   }
 
-  if (r < 0)
+  if (r < 0 && r != -UNW_ENOINFO)
     fprintf(stderr, "unw_step failed: %s [%d]\n",
             unw_strerror(r), r);
 }
