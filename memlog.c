@@ -19,9 +19,6 @@
 
 #include <pthread.h>
 
-#define UNW_LOCAL_ONLY
-#include <libunwind.h>
-
 #include <dlfcn.h>
 
 FILE *log_file = NULL;
@@ -56,7 +53,7 @@ static void record_cleanup() {
   (void) fclose(log_file);
 }
 
-static void print_context(unw_context_t *context) {
+static void print_context(void *caller) {
   struct rusage usage;
   if (getrusage(RUSAGE_SELF, &usage)) {
     fprintf(stderr, "getrusage failed: %m\n");
@@ -66,47 +63,39 @@ static void print_context(unw_context_t *context) {
   fprintf(log_file, "\t%ld.%06ld %ld %ld", usage.ru_utime.tv_sec,
           usage.ru_utime.tv_usec, usage.ru_maxrss, syscall(SYS_gettid));
 
-  int r;
-  unw_cursor_t cursor;
-  if ((r = unw_init_local(&cursor, context))) {
-    fprintf(stderr, "unw_init_local failed: %s [%d]\n",
-            unw_strerror(r), r);
-    return;
-  }
-
   void *pcs[1024];
   int num_pcs = backtrace(pcs, 1024);
+
+  int found_caller = 0;
   for (int pci = 0; pci < num_pcs; ++pci) {
-    unw_word_t pc = (unw_word_t) pcs[pci];
-#if 0
-  while ((r = unw_step(&cursor)) > 0) {
-    unw_word_t pc;
-    if ((r = unw_get_reg(&cursor, UNW_REG_IP, &pc))) {
-      fprintf(stderr, "unw_get_reg UNW_REG_IP failed: %s [%d]\n",
-              unw_strerror(r), r);
-      return;
-    }
-#endif
+    intptr_t pc = (intptr_t) pcs[pci];
 
     if (!pc)
       break;
 
-    unw_word_t off, relpc;
+    if (!found_caller) {
+      if (pc != (intptr_t) caller)
+        continue;
+
+      found_caller = 1;
+    }
+
+    intptr_t off, relpc;
     const char *proc_name;
     const char *file_name;
     Dl_info dlinfo;
     if (dladdr((void *) pc, &dlinfo) && dlinfo.dli_fname &&
         *dlinfo.dli_fname) {
-      unw_word_t saddr = (unw_word_t) dlinfo.dli_saddr;
+      intptr_t saddr = (intptr_t) dlinfo.dli_saddr;
       if (saddr) {
 #if defined(__powerpc64__) && !defined(__powerpc64le__)
         // On PPC64 ELFv1, the symbol address points to the function descriptor, not
         // the actual starting address.
-        saddr = *(unw_word_t*) saddr;
+        saddr = *(intptr_t*) saddr;
 #endif
 
         off = pc - saddr;
-        relpc = pc - ((unw_word_t) dlinfo.dli_fbase);
+        relpc = pc - ((intptr_t) dlinfo.dli_fbase);
       } else {
         off = 0;
         relpc = 0;
@@ -126,64 +115,10 @@ static void print_context(unw_context_t *context) {
 
     fprintf(log_file, "\t%s (%s+0x%x) [0x%lx (0x%lx)]", file_name, proc_name, (int) off,
             (long) pc, (long) relpc);
-
-#if 0
-    unw_word_t off;
-    char proc_name[PATH_MAX];
-    if (unw_get_proc_name(&cursor, proc_name, PATH_MAX, &off)) {
-      off = 0;
-      strcpy(proc_name, "?");
-    }
-
-    unw_proc_info_t pip;
-    if ((r = unw_get_proc_info(&cursor, &pip))) {
-      // unw_get_proc_info is not supported on some platforms (ppc and ppc64,
-      // for example), so we need to try harder...
-      if (r == -UNW_EINVAL) {
-        unw_word_t pc;
-        if ((r = unw_get_reg(&cursor, UNW_REG_IP, &pc))) {
-          fprintf(stderr, "unw_get_reg UNW_REG_IP failed: %s [%d]\n",
-                  unw_strerror(r), r);
-          return;
-        }
-
-        if ((r = unw_get_proc_info_by_ip(unw_local_addr_space, pc, &pip, NULL))) {
-          if (r == -UNW_ENOINFO)
-            break; // the cursor is now invalid; must break here.
-
-          fprintf(stderr, "unw_get_proc_info_by_ip failed: %s [%d]\n",
-                  unw_strerror(r), r);
-          return;
-        }
-      } else {
-        if (r == -UNW_ENOINFO)
-          break; // the cursor is now invalid; must break here.
-
-        fprintf(stderr, "unw_get_proc_info failed: %s [%d]\n",
-                unw_strerror(r), r);
-        return;
-      }
-    }
-
-    const char *file_name;
-    Dl_info dlinfo;
-    if (dladdr((void *)(pip.start_ip + off), &dlinfo) && dlinfo.dli_fname &&
-        *dlinfo.dli_fname)
-      file_name = dlinfo.dli_fname;
-    else
-      file_name = "?";
-
-    fprintf(log_file, "\t%s (%s+0x%x) [%p]", file_name, proc_name, (int) off,
-            (void *) (pip.start_ip + off));
-#endif
   }
-
-  if (r < 0 && r != -UNW_ENOINFO)
-    fprintf(stderr, "unw_step failed: %s [%d]\n",
-            unw_strerror(r), r);
 }
 
-static void record_malloc(size_t size, void *ptr, unw_context_t *uc) {
+static void record_malloc(size_t size, void *ptr, void *caller) {
   if (!log_file)
     return;
 
@@ -191,14 +126,14 @@ static void record_malloc(size_t size, void *ptr, unw_context_t *uc) {
     return;
 
   fprintf(log_file, "M: %zd %p", size, ptr);
-  print_context(uc);
+  print_context(caller);
   fprintf(log_file, "\n");
 
 done:
   pthread_mutex_unlock(&log_mutex);
 }
 
-static void record_free(void *ptr, unw_context_t *uc) {
+static void record_free(void *ptr, void *caller) {
   if (!log_file)
     return;
 
@@ -206,7 +141,7 @@ static void record_free(void *ptr, unw_context_t *uc) {
     return;
 
   fprintf(log_file, "F: %p", ptr);
-  print_context(uc);
+  print_context(caller);
   fprintf(log_file, "\n");
 
 done:
@@ -229,9 +164,8 @@ void *malloc(size_t size) {
 
   void *ptr = __libc_malloc(size);
 
-  unw_context_t uc;
-  if (!unw_getcontext(&uc))
-    record_malloc(size, ptr, &uc);
+  void *caller = __builtin_return_address(0);
+  record_malloc(size, ptr, caller);
 
   in_malloc = 0;
   return ptr;
@@ -245,11 +179,10 @@ void *realloc(void *ptr, size_t size) {
 
   void *nptr = __libc_realloc(ptr, size);
 
-  unw_context_t uc;
-  if (!unw_getcontext(&uc)) {
-    record_free(ptr, &uc);
-    record_malloc(size, nptr, &uc);
-  }
+  void *caller = __builtin_return_address(0);
+  if (ptr)
+    record_free(ptr, caller);
+  record_malloc(size, nptr, caller);
 
   in_malloc = 0;
 
@@ -264,9 +197,8 @@ void *calloc(size_t nmemb, size_t size) {
 
   void *ptr = __libc_calloc(nmemb, size);
 
-  unw_context_t uc;
-  if (!unw_getcontext(&uc))
-    record_malloc(nmemb*size, ptr, &uc);
+  void *caller = __builtin_return_address(0);
+  record_malloc(nmemb*size, ptr, caller);
 
   in_malloc = 0;
 
@@ -281,9 +213,8 @@ void *memalign(size_t boundary, size_t size) {
 
   void *ptr = __libc_memalign(boundary, size);
 
-  unw_context_t uc;
-  if (!unw_getcontext(&uc))
-    record_malloc(size, ptr, &uc);
+  void *caller = __builtin_return_address(0);
+  record_malloc(size, ptr, caller);
 
   in_malloc = 0;
 
@@ -291,14 +222,13 @@ void *memalign(size_t boundary, size_t size) {
 }
 
 void free(void *ptr) {
-  if (in_malloc)
+  if (in_malloc || !ptr)
     return __libc_free(ptr);
 
   in_malloc = 1;
 
-  unw_context_t uc;
-  if (!unw_getcontext(&uc))
-    record_free(ptr, &uc);
+  void *caller = __builtin_return_address(0);
+  record_free(ptr, caller);
 
   __libc_free(ptr);
 
