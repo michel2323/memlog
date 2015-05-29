@@ -22,6 +22,10 @@
 
 #include <dlfcn.h>
 
+// NOTE: When static linking, this depends on linker wrapping.
+// Add to your LDFLAGS:
+//   -Wl,--wrap,malloc,--wrap,free,--wrap,realloc,--wrap,calloc,--wrap,memalign /path/to/memlog_s.o -lpthread -ldl
+
 FILE *log_file = NULL;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
