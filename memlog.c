@@ -62,7 +62,7 @@ static void record_cleanup() {
   (void) fclose(log_file);
 }
 
-static void print_context(const void *caller) {
+static void print_context(const void *caller, int show_backtrace) {
   struct rusage usage;
   if (getrusage(RUSAGE_SELF, &usage)) {
     fprintf(stderr, "getrusage failed: %m\n");
@@ -71,6 +71,9 @@ static void print_context(const void *caller) {
 
   fprintf(log_file, "\t%ld.%06ld %ld %ld", usage.ru_utime.tv_sec,
           usage.ru_utime.tv_usec, usage.ru_maxrss, syscall(SYS_gettid));
+
+  if (!show_backtrace)
+    return;
 
   void *pcs[1024];
   int num_pcs = backtrace(pcs, 1024);
@@ -140,7 +143,7 @@ static void record_malloc(size_t size, void *ptr, const void *caller) {
     return;
 
   fprintf(log_file, "M: %zd %p", size, ptr);
-  print_context(caller);
+  print_context(caller, 1);
   fprintf(log_file, "\n");
 
 done:
@@ -155,7 +158,7 @@ static void record_free(void *ptr, const void *caller) {
     return;
 
   fprintf(log_file, "F: %p", ptr);
-  print_context(caller);
+  print_context(caller, 0);
   fprintf(log_file, "\n");
 
 done:
