@@ -193,7 +193,11 @@ sub get_name($) {
     $func = `c++filt '$func'`;
     chomp($func);
 
-    $ret .= $func . '\n' . $loc . '\n';
+    $ret .= $func . '\n';
+
+    if ($loc !~ /^\?/) {
+      $ret .= $loc . '\n';
+    }
   } elsif ($node->{'proc_name'} ne '?') {
     my $proc_name = $node->{'proc_name'};
     $proc_name = `c++filt '$proc_name'`;
