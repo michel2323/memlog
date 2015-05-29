@@ -1,0 +1,63 @@
+memlog - A Memory-Allocation Logging Tool
+
+This tool attempts to help you answer the question:
+  Why is my application using so much memory?
+
+** LINKING **
+
+How to use it depends on how your application is linked:
+
+For dynamically-linked applications, you can:
+
+ 1. Use LD_PRELOAD: Set LD_PRELOAD=/path/to/memlog/libmemlog.so when you run
+    your application.
+
+ 2. Link directly: Add the following to your linker flags:
+      -L/path/to/memlog -Wl,-rpath,/path/to/memlog -lmemlog
+
+For statically-linked applications, add the following to your linker flags:
+
+  -Wl,--wrap,malloc,--wrap,free,--wrap,realloc,--wrap,calloc,--wrap,memalign \
+    /path/to/memlog/memlog_s.o -lpthread -ldl
+
+** RUNNING **
+
+When your application runs, you should find in your current directory files
+named 'HOST.PID.memlog', one for each process. These contain the raw tracing
+information, and are only somewhat human readable. You can create a ps/pdf
+file detailing the memory allocated when each process reached its peak memory
+use by running:
+
+  /path/to/memlog/memlog2dot /path/to/HOST.PID.memlog
+
+this will generate files named HOST.PID.memlog.dot, HOST.PID.memlog.ps and
+HOST.PID.memlog.pdf. You'll probably find the pdf file most convenient for
+viewing.
+
+Note that te peak memory usage is determined by monitoring the processes's
+maximum resident set size, not just the total allocated heap memory.
+
+memlog2dot depends on dot (from the graphviz package) and ps2pdf (from the
+ghostscript package), plus various tools from the binutils package.
+
+** RELATED WORK **
+
+Why was memlog created? There are several other tools that can support this use
+case, but none of them would work in our environment properly. They were
+either too slow, not runnable under the BG/Q CNK, not thread safe, did not
+properly support big-endian PPC64, supported only either static or dynamic
+linking, did not collect full backtraces, or just did not produce
+sufficiently-informative peak-usage output.
+
+That having been said, some other tools that might interest you:
+  Valgrind Massif - http://valgrind.org/docs/manual/ms-manual.html
+  Google Performance Tools - http://google-perftools.googlecode.com/svn/trunk/doc/heapprofile.html
+  memtrail - https://github.com/jrfonseca/memtrail
+  LeakTracer - http://www.andreasen.org/LeakTracer/
+  glibc mtrace - http://www.gnu.org/s/hello/manual/libc/Allocation-Debugging.html
+  Heaptrack - http://milianw.de/blog/heaptrack-a-heap-memory-profiler-for-linux
+  MemProf - http://www.secretlabs.de/projects/memprof/
+
+The dot/pdf output produced by memlog was definitely inspired by that produced
+by Google's pprof tool in the aforementioned package.
+
