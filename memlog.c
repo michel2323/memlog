@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include <malloc.h>
 #include <execinfo.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
@@ -53,7 +54,7 @@ static void record_cleanup() {
   (void) fclose(log_file);
 }
 
-static void print_context(void *caller) {
+static void print_context(const void *caller) {
   struct rusage usage;
   if (getrusage(RUSAGE_SELF, &usage)) {
     fprintf(stderr, "getrusage failed: %m\n");
@@ -67,7 +68,7 @@ static void print_context(void *caller) {
   int num_pcs = backtrace(pcs, 1024);
 
   int found_caller = 0;
-  caller =  __builtin_extract_return_addr(caller);
+  caller =  __builtin_extract_return_addr((void*) caller);
   for (int pci = 0; pci < num_pcs; ++pci) {
     intptr_t pc = (intptr_t) pcs[pci];
 
@@ -119,7 +120,7 @@ static void print_context(void *caller) {
   }
 }
 
-static void record_malloc(size_t size, void *ptr, void *caller) {
+static void record_malloc(size_t size, void *ptr, const void *caller) {
   if (!log_file)
     return;
 
@@ -134,7 +135,7 @@ done:
   pthread_mutex_unlock(&log_mutex);
 }
 
-static void record_free(void *ptr, void *caller) {
+static void record_free(void *ptr, const void *caller) {
   if (!log_file)
     return;
 
@@ -157,7 +158,15 @@ extern void *__libc_calloc(size_t nmemb, size_t size);
 extern void *__libc_memalign(size_t boundary, size_t size);
 extern void __libc_free(void *ptr);
 
-void *malloc(size_t size) {
+#ifdef __PIC__
+#define FUNC(x) x
+#else
+#define FUNC(x) __wrap_ ## x
+#endif
+
+void *FUNC(malloc)(size_t size) {
+  const void *caller = __builtin_return_address(0);
+
   if (in_malloc)
     return __libc_malloc(size);
 
@@ -165,14 +174,15 @@ void *malloc(size_t size) {
 
   void *ptr = __libc_malloc(size);
 
-  void *caller = __builtin_return_address(0);
   record_malloc(size, ptr, caller);
 
   in_malloc = 0;
   return ptr;
 }
 
-void *realloc(void *ptr, size_t size) {
+void *FUNC(realloc)(void *ptr, size_t size) {
+  const void *caller = __builtin_return_address(0);
+
   if (in_malloc)
     return __libc_realloc(ptr, size);
 
@@ -180,7 +190,6 @@ void *realloc(void *ptr, size_t size) {
 
   void *nptr = __libc_realloc(ptr, size);
 
-  void *caller = __builtin_return_address(0);
   if (ptr)
     record_free(ptr, caller);
   record_malloc(size, nptr, caller);
@@ -190,7 +199,9 @@ void *realloc(void *ptr, size_t size) {
   return nptr;
 }
 
-void *calloc(size_t nmemb, size_t size) {
+void *FUNC(calloc)(size_t nmemb, size_t size) {
+  const void *caller = __builtin_return_address(0);
+
   if (in_malloc)
     return __libc_calloc(nmemb, size);
 
@@ -198,7 +209,6 @@ void *calloc(size_t nmemb, size_t size) {
 
   void *ptr = __libc_calloc(nmemb, size);
 
-  void *caller = __builtin_return_address(0);
   record_malloc(nmemb*size, ptr, caller);
 
   in_malloc = 0;
@@ -206,7 +216,9 @@ void *calloc(size_t nmemb, size_t size) {
   return ptr;
 }
 
-void *memalign(size_t boundary, size_t size) {
+void *FUNC(memalign)(size_t boundary, size_t size) {
+  const void *caller = __builtin_return_address(0);
+
   if (in_malloc)
     return __libc_memalign(boundary, size);
 
@@ -214,7 +226,6 @@ void *memalign(size_t boundary, size_t size) {
 
   void *ptr = __libc_memalign(boundary, size);
 
-  void *caller = __builtin_return_address(0);
   record_malloc(size, ptr, caller);
 
   in_malloc = 0;
@@ -222,13 +233,14 @@ void *memalign(size_t boundary, size_t size) {
   return ptr;
 }
 
-void free(void *ptr) {
+void FUNC(free)(void *ptr) {
+  const void *caller = __builtin_return_address(0);
+
   if (in_malloc || !ptr)
     return __libc_free(ptr);
 
   in_malloc = 1;
 
-  void *caller = __builtin_return_address(0);
   record_free(ptr, caller);
 
   __libc_free(ptr);
