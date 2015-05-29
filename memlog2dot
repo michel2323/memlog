@@ -188,7 +188,7 @@ sub get_name($) {
   if ($func !~ /^\?/) {
     # In general, this function name might look something like:
     #   00000329.plt_call.wcsnrtombs@@GLIBC_2.3+0
-    $func =~ s/@.*//;
+    $func =~ s/@.*//; # Remove trailing symbol version strings
     $func =~ s/.*\.//;
     $func = `c++filt '$func'`;
     chomp($func);
