@@ -1,5 +1,5 @@
 CC = /soft/compilers/bgclang/wbin/bgclang
-CFLAGS = -O3 -g
+CFLAGS = -std=gnu99 -O3 -g
 
 CPPFLAGS =
 LDFLAGS = -lpthread -ldl
