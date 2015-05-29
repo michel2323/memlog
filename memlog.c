@@ -58,8 +58,18 @@ static void record_cleanup() {
   // unwind the stack from here...
   in_malloc = 1;
 
+  // Avoid any racing by obtaining the lock.
+  if (pthread_mutex_lock(&log_mutex))
+    return;
+
   (void) fflush(log_file);
   (void) fclose(log_file);
+}
+
+// dladdr is, relatively, quit slow. For this to work on a large application,
+// we need to cache the lookup results.
+static int dladdr_cached(void *addr, Dl_info *info) {
+  return dladdr(addr, info);
 }
 
 static void print_context(const void *caller, int show_backtrace) {
@@ -79,7 +89,6 @@ static void print_context(const void *caller, int show_backtrace) {
   int num_pcs = backtrace(pcs, 1024);
 
   int found_caller = 0;
-  caller =  __builtin_extract_return_addr((void*) caller);
   for (int pci = 0; pci < num_pcs; ++pci) {
     intptr_t pc = (intptr_t) pcs[pci];
 
@@ -97,7 +106,7 @@ static void print_context(const void *caller, int show_backtrace) {
     const char *proc_name;
     const char *file_name;
     Dl_info dlinfo;
-    if (dladdr((void *) pc, &dlinfo) && dlinfo.dli_fname &&
+    if (dladdr_cached((void *) pc, &dlinfo) && dlinfo.dli_fname &&
         *dlinfo.dli_fname) {
       intptr_t saddr = (intptr_t) dlinfo.dli_saddr;
       if (saddr) {
@@ -180,7 +189,8 @@ extern void __libc_free(void *ptr);
 #endif
 
 void *FUNC(malloc)(size_t size) {
-  const void *caller = __builtin_return_address(0);
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
 
   if (in_malloc)
     return __libc_malloc(size);
@@ -196,7 +206,8 @@ void *FUNC(malloc)(size_t size) {
 }
 
 void *FUNC(realloc)(void *ptr, size_t size) {
-  const void *caller = __builtin_return_address(0);
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
 
   if (in_malloc)
     return __libc_realloc(ptr, size);
@@ -215,7 +226,8 @@ void *FUNC(realloc)(void *ptr, size_t size) {
 }
 
 void *FUNC(calloc)(size_t nmemb, size_t size) {
-  const void *caller = __builtin_return_address(0);
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
 
   if (in_malloc)
     return __libc_calloc(nmemb, size);
@@ -232,7 +244,8 @@ void *FUNC(calloc)(size_t nmemb, size_t size) {
 }
 
 void *FUNC(memalign)(size_t boundary, size_t size) {
-  const void *caller = __builtin_return_address(0);
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
 
   if (in_malloc)
     return __libc_memalign(boundary, size);
@@ -249,7 +262,8 @@ void *FUNC(memalign)(size_t boundary, size_t size) {
 }
 
 void FUNC(free)(void *ptr) {
-  const void *caller = __builtin_return_address(0);
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
 
   if (in_malloc || !ptr)
     return __libc_free(ptr);
