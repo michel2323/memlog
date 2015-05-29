@@ -12,6 +12,15 @@ if (! -f $memlog_fn) {
   exit 1;
 }
 
+# The version of addr2line and friends that you use can make a big difference,
+# especially on BE ppc64, where older versions of addr2line did not account
+# correctly for the function descriptor setup. At ALCF, on the BG/Q, we have
+# newer versions not in the default search path (from bgclang).
+my $alcf_bu_dir = '/soft/compilers/bgclang/current/binutils/bin';
+if (-d $alcf_bu_dir) {
+  $ENV{'PATH'} = $alcf_bu_dir . ':' . $ENV{'PATH'};
+}
+
 open(MEMLOG, $memlog_fn) || die "Can't open $memlog_fn: $!";
 
 # The first step is to determine the high-water mark.
