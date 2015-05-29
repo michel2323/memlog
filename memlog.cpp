@@ -2,11 +2,14 @@
 #define _GNU_SOURCE
 #endif
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <limits.h>
-#include <string.h>
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
 
+#include <unordered_map>
+#include <utility>
+
+#include <limits.h>
 #include <malloc.h>
 #include <execinfo.h>
 #include <sys/syscall.h>
@@ -20,6 +23,8 @@
 
 #include <pthread.h>
 #include <dlfcn.h>
+
+using namespace std;
 
 // NOTE: When static linking, this depends on linker wrapping.
 // Add to your LDFLAGS:
@@ -67,8 +72,21 @@ static void record_cleanup() {
 
 // dladdr is, relatively, quit slow. For this to work on a large application,
 // we need to cache the lookup results.
-static int dladdr_cached(void *addr, Dl_info *info) {
-  return dladdr(addr, info);
+static int dladdr_cached(void * addr, Dl_info *info) {
+  static unordered_map<void *, Dl_info> dladdr_cache;
+
+  auto I = dladdr_cache.find(addr);
+  if (I == dladdr_cache.end()) {
+    int r;
+    if (!(r = dladdr(addr, info)))
+      memset(info, 0, sizeof(Dl_info));
+
+    dladdr_cache.insert(make_pair(addr, *info));
+    return r;
+  }
+
+  memcpy(info, &I->second, sizeof(Dl_info));
+  return 1;
 }
 
 static void print_context(const void *caller, int show_backtrace) {
@@ -175,6 +193,7 @@ done:
 
 // glibc exports its underlying malloc implementation under the name
 // __libc_malloc so that hooks like this can use it.
+extern "C" {
 extern void *__libc_malloc(size_t size);
 extern void *__libc_realloc(void *ptr, size_t size);
 extern void *__libc_calloc(size_t nmemb, size_t size);
@@ -275,4 +294,6 @@ void FUNC(free)(void *ptr) {
 
   in_malloc = 0;
 }
+
+} // extern "C"
 

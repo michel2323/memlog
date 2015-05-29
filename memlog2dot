@@ -205,6 +205,20 @@ sub get_name($) {
     $func = `c++filt '$func'`;
     chomp($func);
 
+    # It sometimes happens that addr2line is a bit too smart: when debugging
+    # information is available, it might print a local alias for the
+    # function instead of the full name (for example, printing 'List'
+    # instead of 'Foo::List<int>::List(int, int const&)').
+    if ($node->{'proc_name'} ne '?') {
+      my $proc_name = $node->{'proc_name'};
+      $proc_name = `c++filt '$proc_name'`;
+      chomp($proc_name);
+
+      if (length($proc_name) > length($func)) {
+        $func = $proc_name;
+      }
+    }
+
     $ret .= $func . '\n';
 
     if ($loc !~ /^\?/) {
