@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 
+// NOTE: This source makes very minimal use of C++11 features. It can still be
+// compiled by g++ 4.4.7 with -std=gnu++0x.
 #include <unordered_map>
 #include <utility>
 
