@@ -1,5 +1,5 @@
 CXX = /soft/compilers/bgclang/wbin/bgclang++
-CXXFLAGS = -std=gnu++11 -O3 -g
+CXXFLAGS = -std=gnu++0x -O3 -g
 
 CPPFLAGS =
 LDFLAGS = -lpthread -ldl
