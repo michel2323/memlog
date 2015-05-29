@@ -4,16 +4,17 @@ CFLAGS = -O3 -g
 CPPFLAGS =
 LDFLAGS = -lpthread -ldl
 
-all: memlog.so memlog.a
+all: libmemlog.so libmemlog.a
 
-memlog.a: memlog.c
+libmemlog.a: memlog.c
 	rm -f memlog.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o memlog.o memlog.c
-	ar cr memlog.a memlog.o
+	ar cr libmemlog.a memlog.o
+	ranlib libmemlog.a
 
-memlog.so: memlog.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -fPIC -shared -o memlog.so memlog.c
+libmemlog.so: memlog.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -fPIC -shared -o libmemlog.so memlog.c
 
 clean:
-	rm -f memlog.o memlog.a memlog.so
+	rm -f memlog.o libmemlog.a libmemlog.so
 
