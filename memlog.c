@@ -28,17 +28,21 @@ static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 // The malloc hook might use functions that call malloc, and we need to make
 // sure this does not cause an infinite loop.
 static __thread int in_malloc = 0;
+static char self_path[PATH_MAX+1] = { '\0' };
 
 __attribute__((__constructor__))
 static void record_init() {
   struct utsname u;
   uname(&u);
 
-  char log_name[PATH_MAX];
-  snprintf(log_name, PATH_MAX, "%s.%d.memlog", u.nodename, getpid());
+  char log_name[PATH_MAX+1];
+  snprintf(log_name, PATH_MAX+1, "%s.%d.memlog", u.nodename, getpid());
   log_file = fopen(log_name, "w");
   if (!log_file)
     fprintf(stderr, "fopen failed for '%s': %m\n", log_name);
+
+  const char *link_name = "/proc/self/exe";
+  readlink(link_name, self_path, PATH_MAX);
 }
 
 __attribute__((__destructor__))
@@ -109,10 +113,14 @@ static void print_context(const void *caller) {
 
       file_name = dlinfo.dli_fname;
     } else {
-      off = pc;
-      relpc = pc;
+      // We don't know these...
+      off = 0;
+      relpc = 0;
       proc_name = "?";
-      file_name = "?";
+
+      // If we can't determine the file, assume it is the base executable
+      // (which does the right thing for statically-linked binaries).
+      file_name = self_path;
     }
 
     fprintf(log_file, "\t%s (%s+0x%x) [0x%lx (0x%lx)]", file_name, proc_name, (int) off,
