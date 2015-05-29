@@ -19,7 +19,6 @@
 #include <unistd.h>
 
 #include <pthread.h>
-
 #include <dlfcn.h>
 
 // NOTE: When static linking, this depends on linker wrapping.
