@@ -198,7 +198,17 @@ sub get_name($) {
   }
 
   my $file_name = $node->{'file_name'};
-  my ($func, $loc) = `addr2line -e $file_name -f 0x$exe_off`;
+
+  # If we don't have an absolute path, this is probably the base dynamic
+  # executable, so ask the shell which one it used (not foolproof because we
+  # might not have the same PATH now, but hopefully is generally the right
+  # thing).
+  if ($file_name !~ /^\//) {
+    $file_name = `which '$file_name'`;
+    chomp($file_name);
+  }
+
+  my ($func, $loc) = `addr2line -e '$file_name' -f 0x$exe_off`;
   chomp($func);
   chomp($loc);
 
