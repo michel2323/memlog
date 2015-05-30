@@ -146,10 +146,12 @@ foreach my $line (values %malloc_lines) {
   }
 }
 
+my $txt_fn = "$out_dir/" . basename($memlog_fn) . ".txt";
 my $dot_fn = "$out_dir/" . basename($memlog_fn) . ".dot";
 my $ps_fn = "$out_dir/" . basename($memlog_fn) . ".ps";
 my $pdf_fn = "$out_dir/" . basename($memlog_fn) . ".pdf";
 
+open(TXT, ">$txt_fn") || die "Can't open $txt_fn: $!";
 open(DOT, ">$dot_fn") || die "Can't open $dot_fn: $!";
 
 sub format_bytes($) {
@@ -171,6 +173,9 @@ print DOT ("node [width=0.375,height=0.25];\n");
 
 printf DOT ("Legend [shape=box, fontsize=100, shape=oval," .
             "label=\"Total: %s active at maxrss = %s after %s s\"];\n",
+            format_bytes($total_size), format_bytes($max_rss), $max_rss_time);
+
+printf TXT ("memlog: Total: %s active at maxrss = %s after %s s\n\n",
             format_bytes($total_size), format_bytes($max_rss), $max_rss_time);
 
 my %cached_names;
@@ -246,7 +251,6 @@ my %skipped;
 
 foreach my $pc (keys %all_nodes) {
   my $node = $all_nodes{$pc};
-  my $name = get_name($node);
 
   my $local_size = $node->{'size'};
   if ($local_size * 1.0 / $total_size < $skip_frac) {
@@ -259,17 +263,19 @@ foreach my $pc (keys %all_nodes) {
     $fs = 50.0 * (abs($local_size * 1.0 / $total_size))**0.125;
   }
 
+  my $name = get_name($node);
+
   printf DOT ("N%s [label=\"%s\\n%s\", shape=box, fontsize=%.1f%s];\n",
     $pc, $name, format_bytes($local_size), $fs);
 }
 
 foreach my $pc (keys %all_nodes) {
-  my $node = $all_nodes{$pc};
-
-  my $local_size = $node->{'size'};
   if ($skipped{$pc}) {
     next;
   }
+
+  my $node = $all_nodes{$pc};
+  my $local_size = $node->{'size'};
 
   foreach my $cpc (keys %{$node->{'child_sizes'}}) {
     if ($skipped{$cpc}) {
@@ -291,6 +297,51 @@ foreach my $pc (keys %all_nodes) {
 
 print DOT ("}\n");
 
+foreach my $pc (sort { $all_nodes{$::b}->{'size'} <=>
+                       $all_nodes{$::a}->{'size'} } keys %all_nodes) {
+  if ($skipped{$pc}) {
+    next;
+  }
+
+  print TXT ('*' x 80) . "\n\n";
+
+  my $node = $all_nodes{$pc};
+
+  my $local_size = $node->{'size'};
+  printf TXT ("%s - %.1f%%\n", format_bytes($local_size),
+              $local_size * 100.0 / $total_size);
+
+  my $name = get_name($node);
+  $name =~ s/\\n/\n/g;
+
+  print TXT "$name\n$pc\n";
+
+  print TXT "\nMEMORY ALLOCATED BY CALLEES:\n";
+
+  foreach my $cpc (sort { $node->{'child_sizes'}->{$::b} <=>
+                          $node->{'child_sizes'}->{$::a} }
+                     keys %{$node->{'child_sizes'}}) {
+    if ($skipped{$cpc}) {
+      next;
+    }
+
+    my $child_node = $all_nodes{$cpc};
+    my $child_size = $node->{'child_sizes'}->{$cpc};
+
+    printf TXT ("\t%s - %.1f%%\n", format_bytes($child_size),
+                $child_size * 100.0 / $local_size);
+
+    my $child_name = get_name($child_node);
+    $child_name =~ s/\\n/\n\t/g;
+    print TXT "\t$child_name\n\t$cpc\n";
+
+    print TXT "\n";
+  }
+
+  print TXT "\n";
+}
+
+close(TXT);
 close(DOT);
 
 system("dot -Tps2 < '$dot_fn' > '$ps_fn'");
