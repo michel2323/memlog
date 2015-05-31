@@ -35,6 +35,10 @@ HOST.PID.memlog.pdf. You'll probably find the pdf file most convenient for
 viewing. HOST.PID.memlog.txt is also generated, providing the same information
 in textual form.
 
+When running under common batch systems, the files are named
+JOB_ID.HOST.PID.memlog, and when running under the BG/Q CNK, the process's rank
+is used instead of the node-local PID.
+
 Note that te peak memory usage is determined by monitoring the processes's
 maximum resident set size, not just the total allocated heap memory.
 

@@ -36,7 +36,7 @@ using namespace std;
 // Add to your LDFLAGS:
 //   -Wl,--wrap,malloc,--wrap,free,--wrap,realloc,--wrap,calloc,--wrap,memalign /path/to/memlog_s.o -lpthread -ldl
 
-FILE *log_file = NULL;
+FILE *log_file = 0;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // The malloc hook might use functions that call malloc, and we need to make
@@ -57,8 +57,23 @@ static void record_init() {
     id = (int) Kernel_GetRank();
 #endif
 
+  // If we're running under a common batch system, add the job id to the output
+  // file names (add it as a prefix so that sorting the files will sort by job
+  // first).
+  char *job_id = 0;
+  const char *job_id_vars[] =
+    { "COBALT_JOBID", "PBS_JOBID", "SLURM_JOB_ID", "JOB_ID" };
+  for (int i = 0; i < sizeof(job_id_vars)/sizeof(job_id_vars[0]); ++i) {
+    job_id = getenv(job_id_vars[i]);
+    if (job_id)
+      break;
+  }
+
   char log_name[PATH_MAX+1];
-  snprintf(log_name, PATH_MAX+1, "%s.%d.memlog", u.nodename, id);
+  if (job_id)
+    snprintf(log_name, PATH_MAX+1, "%s.%s.%d.memlog", job_id, u.nodename, id);
+  else
+    snprintf(log_name, PATH_MAX+1, "%s.%d.memlog", u.nodename, id);
   log_file = fopen(log_name, "w");
   if (!log_file)
     fprintf(stderr, "fopen failed for '%s': %m\n", log_name);
