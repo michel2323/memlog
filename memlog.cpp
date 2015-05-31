@@ -26,6 +26,10 @@
 #include <pthread.h>
 #include <dlfcn.h>
 
+#ifdef __bgq__
+#include <spi/include/kernel/location.h>
+#endif
+
 using namespace std;
 
 // NOTE: When static linking, this depends on linker wrapping.
@@ -45,8 +49,16 @@ static void record_init() {
   struct utsname u;
   uname(&u);
 
+  int id = (int) getpid();
+#ifdef __bgq__
+  // If we're really running on a BG/Q compute node, use the job rank instead
+  // of the pid because the node name might not really be globally unique.
+  if (!strcmp(u.sysname, "CNK") && !strcmp(u.machine, "BGQ"))
+    id = (int) Kernel_GetRank();
+#endif
+
   char log_name[PATH_MAX+1];
-  snprintf(log_name, PATH_MAX+1, "%s.%d.memlog", u.nodename, getpid());
+  snprintf(log_name, PATH_MAX+1, "%s.%d.memlog", u.nodename, id);
   log_file = fopen(log_name, "w");
   if (!log_file)
     fprintf(stderr, "fopen failed for '%s': %m\n", log_name);

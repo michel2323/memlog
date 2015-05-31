@@ -1,7 +1,9 @@
 CXX = /soft/compilers/bgclang/wbin/bgclang++
 CXXFLAGS = -std=gnu++0x -O3 -g
 
-CPPFLAGS =
+# When compiling with CXX=powerpc64-bgq-linux-g++, we need these:
+CPPFLAGS = -I/bgsys/drivers/ppcfloor -I/bgsys/drivers/ppcfloor/spi/include/kernel/cnk
+
 LDFLAGS = -lpthread -ldl
 
 # Set this to use the install target
