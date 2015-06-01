@@ -1,15 +1,41 @@
 #! /usr/bin/env perl
 use strict;
 use File::Basename;
+use Getopt::Long;
+
+my $print_raw_proc_name = 0;
+my $quiet = 0;
+my $help = 0;
+
+sub print_usage($) {
+  my $ec = $_[0];
+  my $usage = <<EOM;
+Usage: $0 [options] <memlog file> [<output directory>]
+  options:
+    --print-symbol-names
+      Include symbol names and offsets in the output
+    --quiet or -q
+      Don't print status messages while running
+EOM
+
+  print $usage;
+  exit($ec);
+}
+
+GetOptions("help|?" => \$help,
+           "print-symbol-names" => \$print_raw_proc_name,
+           "quiet|q" => \$quiet)
+  or print_usage(1);
+
+if ($help) {
+  print_usage(0);
+}
 
 my $memlog_fn = $ARGV[0];
 my $out_dir = $ARGV[1] || '.';
 
-my $print_raw_proc_name = 0;
-
 if (! -f $memlog_fn) {
-  print "Usage: $0 <memlog file> [<output directory>]\n";
-  exit 1;
+  print_usage(1);
 }
 
 # The version of addr2line and friends that you use can make a big difference,
@@ -151,7 +177,16 @@ my $dot_fn = "$out_dir/" . basename($memlog_fn) . ".dot";
 my $ps_fn = "$out_dir/" . basename($memlog_fn) . ".ps";
 my $pdf_fn = "$out_dir/" . basename($memlog_fn) . ".pdf";
 
+if (!$quiet) {
+  print "Creating $txt_fn\n";
+}
+
 open(TXT, ">$txt_fn") || die "Can't open $txt_fn: $!";
+
+if (!$quiet) {
+  print "Creating $dot_fn\n";
+}
+
 open(DOT, ">$dot_fn") || die "Can't open $dot_fn: $!";
 
 sub format_bytes($) {
@@ -354,7 +389,16 @@ foreach my $pc (sort { $all_nodes{$::b}->{'size'} <=>
 close(TXT);
 close(DOT);
 
+if (!$quiet) {
+  print "Creating $ps_fn\n";
+}
+
 system("dot -Tps2 < '$dot_fn' > '$ps_fn'");
+
+if (!$quiet) {
+  print "Creating $pdf_fn\n";
+}
+
 system("ps2pdf '$ps_fn' '$pdf_fn'");
 
 exit 0;
