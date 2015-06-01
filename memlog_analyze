@@ -3,6 +3,7 @@ use strict;
 use File::Basename;
 use Getopt::Long;
 
+my $find_leaks = 0;
 my $print_raw_proc_name = 0;
 my $quiet = 0;
 my $help = 0;
@@ -12,6 +13,8 @@ sub print_usage($) {
   my $usage = <<EOM;
 Usage: $0 [options] <memlog file> [<output directory>]
   options:
+    --leaks
+      Provide information on leaks instead of peak usage
     --print-symbol-names
       Include symbol names and offsets in the output
     --quiet or -q
@@ -23,6 +26,7 @@ EOM
 }
 
 GetOptions("help|h|?" => \$help,
+           "leaks" => \$find_leaks,
            "print-symbol-names" => \$print_raw_proc_name,
            "quiet|q" => \$quiet)
   or print_usage(1);
@@ -68,7 +72,8 @@ seek(MEMLOG, 0, 0);
 
 # Scan the log for malloc/free pairings. We're interested only in active
 # allocations at the time when the rss reaches the final maxrss.
-my $max_rss_time = 0;
+# If we're finding leaks, then go to the very end.
+my $active_alloc_time = 0;
 my %malloc_lines;
 foreach my $line (<MEMLOG>) {
   chomp($line);
@@ -87,11 +92,14 @@ foreach my $line (<MEMLOG>) {
     next;
   }
 
-  # If we've reached the max rss, we've seen all we need to see.
   my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
-  $max_rss_time = $time;
-  if ($then_max_rss == $max_rss) {
-    last;
+  $active_alloc_time = $time;
+
+  if (!$find_leaks) {
+    # If we've reached the max rss, we've seen all we need to see.
+    if ($then_max_rss == $max_rss) {
+      last;
+    }
   }
 }
 
@@ -206,12 +214,15 @@ print DOT ("digraph \"memlog\" {\n");
 print DOT ("size=\"8,11\";\n");
 print DOT ("node [width=0.375,height=0.25];\n");
 
+my $find_type = $find_leaks ? " (leaks)" : "";
 printf DOT ("Legend [shape=box, fontsize=100, shape=oval," .
-            "label=\"Total: %s active at maxrss = %s after %s s\"];\n",
-            format_bytes($total_size), format_bytes($max_rss), $max_rss_time);
+            "label=\"Total: %s active$find_type at maxrss = %s after %s s\"];\n",
+            format_bytes($total_size), format_bytes($max_rss),
+            $active_alloc_time);
 
-printf TXT ("memlog: Total: %s active at maxrss = %s after %s s\n\n",
-            format_bytes($total_size), format_bytes($max_rss), $max_rss_time);
+printf TXT ("memlog: Total: %s active$find_type at maxrss = %s after %s s\n\n",
+            format_bytes($total_size), format_bytes($max_rss),
+            $active_alloc_time);
 
 my %cached_names;
 sub get_name($) {
