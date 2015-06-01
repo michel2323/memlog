@@ -1,6 +1,7 @@
 #! /usr/bin/env perl
 use strict;
 use File::Basename;
+use File::Path qw(make_path);
 use Getopt::Long;
 
 my $find_leaks = 0;
@@ -35,12 +36,14 @@ if ($help) {
   print_usage(0);
 }
 
-if (scalar(@ARGV) > 1) {
+if (scalar(@ARGV) > 2) {
   print_usage(2);
 }
 
 my $memlog_fn = $ARGV[0];
 my $out_dir = $ARGV[1] || '.';
+
+make_path($out_dir);
 
 if (! -f $memlog_fn) {
   my @pot_fns = glob($memlog_fn);
