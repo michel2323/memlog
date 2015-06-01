@@ -35,6 +35,10 @@ HOST.PID.memlog.pdf. You'll probably find the pdf file most convenient for
 viewing. HOST.PID.memlog.txt is also generated, providing the same information
 in textual form.
 
+If you pass the --leaks option to memlog_analyze, it will provide data on
+allocations active at the end of the program (leaks) instead of those active
+when the peak memory usage is first reached.
+
 When running under common batch systems, the files are named
 JOB_ID.HOST.PID.memlog, and when running under the BG/Q CNK, the process's rank
 is used instead of the node-local PID.
