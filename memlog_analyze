@@ -11,7 +11,7 @@ my $help = 0;
 sub print_usage($) {
   my $ec = $_[0];
   my $usage = <<EOM;
-Usage: $0 [options] <memlog file> [<output directory>]
+Usage: $0 [options] <memlog file or glob> [<output directory>]
   options:
     --leaks
       Provide information on leaks instead of peak usage
@@ -39,8 +39,39 @@ my $memlog_fn = $ARGV[0];
 my $out_dir = $ARGV[1] || '.';
 
 if (! -f $memlog_fn) {
+  my @pot_fns = glob($memlog_fn);
+  if (scalar(@pot_fns)) {
+    if (!$quiet) {
+      print "Searching all files matching '$memlog_fn'\n";
+    }
+
+    my $pot_max_rss = 0;
+    my $pos_max_rss_fn;
+    foreach my $pot_fn (@pot_fns) {
+      my $last_line = `tail -n 1 '$pot_fn'`;
+      chomp($last_line);
+
+      my @parts = split(/\t/, $last_line);
+
+      my $op = shift(@parts);
+      my $state = shift(@parts);
+
+      my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+      if ($pot_max_rss < $then_max_rss) {
+        $pot_max_rss = $then_max_rss;
+        $pos_max_rss_fn = $pot_fn;
+      }
+    }
+
+    if (defined $pos_max_rss_fn) {
+      $memlog_fn = $pos_max_rss_fn;
+      goto have_memlog_fn;
+    }
+  }
+
   print_usage(1);
 }
+have_memlog_fn:
 
 # The version of addr2line and friends that you use can make a big difference,
 # especially on BE ppc64, where older versions of addr2line did not account

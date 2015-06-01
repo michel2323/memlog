@@ -39,6 +39,14 @@ If you pass the --leaks option to memlog_analyze, it will provide data on
 allocations active at the end of the program (leaks) instead of those active
 when the peak memory usage is first reached.
 
+You might have many runs of the same application (or output from many ranks of
+an MPI job), and you'd like to pick the one for analysis with the highest
+memory usage. If you provide a glob pattern to memlog_analyze it will do this
+for you. Make sure you quote the glob pattern so that your shell does not
+expand it.
+
+  /path/to/memlog/memlog_analyze "/path/to/*.memlog"
+
 When running under common batch systems, the files are named
 JOB_ID.HOST.PID.memlog, and when running under the BG/Q CNK, the process's rank
 is used instead of the node-local PID.
