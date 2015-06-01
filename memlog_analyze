@@ -35,6 +35,10 @@ if ($help) {
   print_usage(0);
 }
 
+if (scalar(@ARGV) > 1) {
+  print_usage(2);
+}
+
 my $memlog_fn = $ARGV[0];
 my $out_dir = $ARGV[1] || '.';
 
