@@ -271,7 +271,7 @@ sub get_name($) {
 
     $ret .= $func . '\n';
 
-    if ($loc !~ /^\?/) {
+    if ($loc !~ /^[:?]/) {
       $ret .= $loc . '\n';
     }
   } elsif ($node->{'proc_name'} ne '?') {
