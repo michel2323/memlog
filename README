@@ -54,6 +54,10 @@ is used instead of the node-local PID.
 Note that te peak memory usage is determined by monitoring the processes's
 maximum resident set size, not just the total allocated heap memory.
 
+memlog_analyze takes, as a second optional parameter, the name of the output
+directory (the current directory is the default). If the directory does not
+exist, it will be created.
+
 memlog_analyze depends on dot (from the graphviz package) and ps2pdf (from the
 ghostscript package), plus various tools from the binutils package.
 
