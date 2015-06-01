@@ -22,7 +22,7 @@ EOM
   exit($ec);
 }
 
-GetOptions("help|?" => \$help,
+GetOptions("help|h|?" => \$help,
            "print-symbol-names" => \$print_raw_proc_name,
            "quiet|q" => \$quiet)
   or print_usage(1);
