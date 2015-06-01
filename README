@@ -28,7 +28,7 @@ information, and are only somewhat human readable. You can create a ps/pdf
 file detailing the memory allocated when each process reached its peak memory
 use by running:
 
-  /path/to/memlog/memlog2dot /path/to/HOST.PID.memlog
+  /path/to/memlog/memlog_analyze /path/to/HOST.PID.memlog
 
 this will generate files named HOST.PID.memlog.dot, HOST.PID.memlog.ps and
 HOST.PID.memlog.pdf. You'll probably find the pdf file most convenient for
@@ -42,7 +42,7 @@ is used instead of the node-local PID.
 Note that te peak memory usage is determined by monitoring the processes's
 maximum resident set size, not just the total allocated heap memory.
 
-memlog2dot depends on dot (from the graphviz package) and ps2pdf (from the
+memlog_analyze depends on dot (from the graphviz package) and ps2pdf (from the
 ghostscript package), plus various tools from the binutils package.
 
 ** RELATED WORK **

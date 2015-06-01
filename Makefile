@@ -17,8 +17,8 @@ memlog_s.o: memlog.cpp
 libmemlog.so: memlog.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) -fPIC -shared -o libmemlog.so memlog.cpp
 
-install: all memlog2dot README
-	cp -a libmemlog.so memlog_s.o memlog2dot README $(DESTDIR)/
+install: all memlog_analyze README
+	cp -a libmemlog.so memlog_s.o memlog_analyze README $(DESTDIR)/
 
 clean:
 	rm -f memlog_s.o libmemlog.so
