@@ -15,6 +15,7 @@
 #include <limits.h>
 #include <malloc.h>
 #include <execinfo.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -51,6 +52,16 @@ int on_bgq = 0;
 #endif
 
 void *initial_brk = 0;
+
+#ifdef __PIC__
+typedef int (*__real_posix_memalign_t)(void **memptr, size_t alignment,
+                                       size_t size);
+__real_posix_memalign_t __real_posix_memalign = 0;
+#else
+extern "C" {
+extern int __real_posix_memalign(void **memptr, size_t alignment, size_t size);
+}
+#endif
 
 __attribute__((__constructor__))
 static void record_init() {
@@ -247,10 +258,17 @@ done:
 // __libc_malloc so that hooks like this can use it.
 extern "C" {
 extern void *__libc_malloc(size_t size);
+extern void *__libc_valloc(size_t size);
 extern void *__libc_realloc(void *ptr, size_t size);
 extern void *__libc_calloc(size_t nmemb, size_t size);
 extern void *__libc_memalign(size_t boundary, size_t size);
 extern void __libc_free(void *ptr);
+
+extern void *__mmap(void *addr, size_t length, int prot, int flags,
+                    int fd, off_t offset);
+extern void *__mmap64(void *addr, size_t length, int prot, int flags,
+                      int fd, off64_t offset);
+extern int __munmap(void *addr, size_t length);
 
 #ifdef __PIC__
 #define FUNC(x) x
@@ -268,8 +286,25 @@ void *FUNC(malloc)(size_t size) {
   in_malloc = 1;
 
   void *ptr = __libc_malloc(size);
+  if (ptr)
+    record_malloc(size, ptr, caller);
 
-  record_malloc(size, ptr, caller);
+  in_malloc = 0;
+  return ptr;
+}
+
+void *FUNC(valloc)(size_t size) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+  if (in_malloc)
+    return __libc_valloc(size);
+
+  in_malloc = 1;
+
+  void *ptr = __libc_valloc(size);
+  if (ptr)
+    record_malloc(size, ptr, caller);
 
   in_malloc = 0;
   return ptr;
@@ -288,7 +323,8 @@ void *FUNC(realloc)(void *ptr, size_t size) {
 
   if (ptr)
     record_free(ptr, caller);
-  record_malloc(size, nptr, caller);
+  if (nptr)
+    record_malloc(size, nptr, caller);
 
   in_malloc = 0;
 
@@ -306,7 +342,8 @@ void *FUNC(calloc)(size_t nmemb, size_t size) {
 
   void *ptr = __libc_calloc(nmemb, size);
 
-  record_malloc(nmemb*size, ptr, caller);
+  if (ptr)
+    record_malloc(nmemb*size, ptr, caller);
 
   in_malloc = 0;
 
@@ -324,7 +361,8 @@ void *FUNC(memalign)(size_t boundary, size_t size) {
 
   void *ptr = __libc_memalign(boundary, size);
 
-  record_malloc(size, ptr, caller);
+  if (ptr)
+    record_malloc(size, ptr, caller);
 
   in_malloc = 0;
 
@@ -345,6 +383,90 @@ void FUNC(free)(void *ptr) {
   __libc_free(ptr);
 
   in_malloc = 0;
+}
+
+int FUNC(posix_memalign)(void **memptr, size_t alignment, size_t size) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+#ifdef __PIC__
+  if (!__real_posix_memalign)
+    if (!(__real_posix_memalign =
+        (__real_posix_memalign_t) dlsym(RTLD_NEXT, "posix_memalign")))
+      return -1;
+#endif
+
+  if (in_malloc)
+    return __real_posix_memalign(memptr, alignment, size);
+
+  in_malloc = 1;
+
+  int r = __real_posix_memalign(memptr, alignment, size);
+
+  if (!r)
+    record_malloc(size, *memptr, caller);
+
+  in_malloc = 0;
+
+  return r;
+}
+
+void *FUNC(mmap)(void *addr, size_t length, int prot, int flags,
+                 int fd, off_t offset) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+  if (in_malloc)
+    return __mmap(addr, length, prot, flags, fd, offset);
+
+  in_malloc = 1;
+
+  void *ptr = __mmap(addr, length, prot, flags, fd, offset);
+
+  if (ptr != MAP_FAILED)
+    record_malloc(length, ptr, caller);
+
+  in_malloc = 0;
+
+  return ptr;
+}
+
+void *FUNC(mmap64)(void *addr, size_t length, int prot, int flags,
+                   int fd, off64_t offset) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+  if (in_malloc)
+    return __mmap64(addr, length, prot, flags, fd, offset);
+
+  in_malloc = 1;
+
+  void *ptr = __mmap64(addr, length, prot, flags, fd, offset);
+
+  if (ptr != MAP_FAILED)
+    record_malloc(length, ptr, caller);
+
+  in_malloc = 0;
+
+  return ptr;
+}
+
+int FUNC(munmap)(void *addr, size_t length) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+  if (in_malloc)
+    return __munmap(addr, length);
+
+  in_malloc = 1;
+
+  record_free(addr, caller);
+
+  int r = __munmap(addr, length);
+
+  in_malloc = 0;
+
+  return r;
 }
 
 } // extern "C"
