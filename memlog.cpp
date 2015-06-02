@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 
 // NOTE: This source makes very minimal use of C++11 features. It can still be
 // compiled by g++ 4.4.7 with -std=gnu++0x.
@@ -28,6 +29,7 @@
 
 #ifdef __bgq__
 #include <spi/include/kernel/location.h>
+#include <spi/include/kernel/memory.h>
 #endif
 
 using namespace std;
@@ -44,6 +46,12 @@ static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static __thread int in_malloc = 0;
 static char self_path[PATH_MAX+1] = { '\0' };
 
+#ifdef __bgq__
+int on_bgq = 0;
+#endif
+
+void *initial_brk = 0;
+
 __attribute__((__constructor__))
 static void record_init() {
   struct utsname u;
@@ -53,8 +61,10 @@ static void record_init() {
 #ifdef __bgq__
   // If we're really running on a BG/Q compute node, use the job rank instead
   // of the pid because the node name might not really be globally unique.
-  if (!strcmp(u.sysname, "CNK") && !strcmp(u.machine, "BGQ"))
+  if (!strcmp(u.sysname, "CNK") && !strcmp(u.machine, "BGQ")) {
     id = (int) Kernel_GetRank();
+    on_bgq = 1;
+  }
 #endif
 
   // If we're running under a common batch system, add the job id to the output
@@ -80,6 +90,8 @@ static void record_init() {
 
   const char *link_name = "/proc/self/exe";
   readlink(link_name, self_path, PATH_MAX);
+
+  initial_brk = sbrk(0);
 }
 
 __attribute__((__destructor__))
@@ -127,6 +139,17 @@ static void print_context(const void *caller, int show_backtrace) {
 
   fprintf(log_file, "\t%ld.%06ld %ld %ld", usage.ru_utime.tv_sec,
           usage.ru_utime.tv_usec, usage.ru_maxrss, syscall(SYS_gettid));
+
+  // Some other memory stats (like with maxrss, report these in KB).
+  size_t arena_size = ((size_t) sbrk(0)) - (size_t) initial_brk;
+
+  uint64_t mmap_size = 0;
+#ifdef __bgq__
+  if (on_bgq)
+    (void) Kernel_GetMemorySize(KERNEL_MEMSIZE_MMAP, &mmap_size);
+#endif
+
+  fprintf(log_file, " %ld %ld", arena_size >> 10, mmap_size >> 10);
 
   if (!show_backtrace)
     return;

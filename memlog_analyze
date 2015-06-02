@@ -63,7 +63,8 @@ if (! -f $memlog_fn) {
       my $op = shift(@parts);
       my $state = shift(@parts);
 
-      my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+      my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+        split(/\s+/, $state);
       if ($pot_max_rss < $then_max_rss) {
         $pot_max_rss = $then_max_rss;
         $pos_max_rss_fn = $pot_fn;
@@ -93,6 +94,8 @@ open(MEMLOG, $memlog_fn) || die "Can't open $memlog_fn: $!";
 
 # The first step is to determine the high-water mark.
 my $max_rss = 0;
+my $arena = 0;
+my $mmap = 0;
 foreach my $line (<MEMLOG>) {
   chomp($line);
   my @parts = split(/\t/, $line);
@@ -100,9 +103,12 @@ foreach my $line (<MEMLOG>) {
   my $op = shift(@parts);
   my $state = shift(@parts);
 
-  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+  my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+    split(/\s+/, $state);
   if ($max_rss < $then_max_rss) {
     $max_rss = $then_max_rss;
+    $arena = $then_arena;
+    $mmap = $then_mmap;
   }
 }
 
@@ -130,7 +136,8 @@ foreach my $line (<MEMLOG>) {
     next;
   }
 
-  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+  my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+    split(/\s+/, $state);
   $active_alloc_time = $time;
 
   if (!$find_leaks) {
@@ -145,6 +152,12 @@ close(MEMLOG);
 
 # Convert maxrss, currently in KB, to bytes.
 $max_rss *= 1024;
+if (defined $arena) {
+  $arena *= 1024;
+}
+if (defined $mmap) {
+  $mmap *= 1024;
+}
 
 my $total_size = 0;
 my %roots;
@@ -161,7 +174,8 @@ foreach my $line (values %malloc_lines) {
   }
 
   my ($size, $ptr) = ($op =~ /^M: (\d+) 0x(\w+)/);
-  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+  my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+    split(/\s+/, $state);
 
   $total_size += $size;
 
@@ -248,19 +262,32 @@ sub format_bytes($) {
   return sprintf("%.3f $sizes[$i]", $size);
 }
 
+sub format_bytes_or_unk($) {
+  my $b = $_[0];
+  return defined($b) ? format_bytes($b) : "(unknown)";
+}
+
 print DOT ("digraph \"memlog\" {\n");
 print DOT ("size=\"8,11\";\n");
 print DOT ("node [width=0.375,height=0.25];\n");
 
 my $find_type = $find_leaks ? " (leaks)" : "";
-printf DOT ("Legend [shape=box, fontsize=100, shape=oval," .
-            "label=\"Total: %s active$find_type at maxrss = %s after %s s\"];\n",
+print DOT "subgraph cluster_key {\n";
+print DOT "\trank=min;\n";
+print DOT "\tlabel=\"memlog\";\n";
+print DOT "\tfontsize=100;\n";
+print DOT "\trankdir=UR;\n";
+printf DOT ("Legend [shape=box, fontsize=100, shape=plaintext," .
+            "label=\"Total: %s active$find_type at maxrss = %s after %s s\\narena: %s\\nmmap: %s\"];\n",
             format_bytes($total_size), format_bytes($max_rss),
-            $active_alloc_time);
+            $active_alloc_time, format_bytes_or_unk($arena),
+            format_bytes_or_unk($mmap));
+print DOT "}\n";
 
-printf TXT ("memlog: Total: %s active$find_type at maxrss = %s after %s s\n\n",
+printf TXT ("memlog: Total: %s active$find_type at maxrss = %s after %s s\n\tarena: %s\tmmap: %s\n\n",
             format_bytes($total_size), format_bytes($max_rss),
-            $active_alloc_time);
+            $active_alloc_time, format_bytes_or_unk($arena),
+            format_bytes_or_unk($mmap));
 
 my %cached_names;
 sub get_name($) {
