@@ -17,7 +17,8 @@ For dynamically-linked applications, you can:
 
 For statically-linked applications, add the following to your linker flags:
 
-  -Wl,--wrap,malloc,--wrap,free,--wrap,realloc,--wrap,calloc,--wrap,memalign \
+  -Wl,--wrap,malloc,--wrap,valloc,--wrap,realloc,--wrap,calloc,--wrap,memalign,--wrap,free \
+    -Wl,--wrap,posix_memalign,--wrap,mmap,--wrap,mmap64,--wrap,munmap \
     /path/to/memlog/memlog_s.o -lpthread -ldl
 
 ** RUNNING **

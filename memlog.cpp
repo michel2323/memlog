@@ -53,16 +53,6 @@ int on_bgq = 0;
 
 void *initial_brk = 0;
 
-#ifdef __PIC__
-typedef int (*__real_posix_memalign_t)(void **memptr, size_t alignment,
-                                       size_t size);
-__real_posix_memalign_t __real_posix_memalign = 0;
-#else
-extern "C" {
-extern int __real_posix_memalign(void **memptr, size_t alignment, size_t size);
-}
-#endif
-
 __attribute__((__constructor__))
 static void record_init() {
   struct utsname u;
@@ -254,6 +244,26 @@ done:
   pthread_mutex_unlock(&log_mutex);
 }
 
+#ifdef __PIC__
+int (*__real_posix_memalign)(void **memptr, size_t alignment, size_t size) = 0;
+
+void *(*__real_mmap)(void *addr, size_t length, int prot, int flags,
+                     int fd, off_t offset) = 0;
+void *(*__real_mmap64)(void *addr, size_t length, int prot, int flags,
+                       int fd, off64_t offset) = 0;
+int (*__real_munmap)(void *addr, size_t length) = 0;
+#else
+extern "C" {
+extern int __real_posix_memalign(void **memptr, size_t alignment, size_t size);
+
+extern void *__real_mmap(void *addr, size_t length, int prot, int flags,
+                         int fd, off_t offset);
+extern void *__real_mmap64(void *addr, size_t length, int prot, int flags,
+                           int fd, off64_t offset);
+extern int __real_munmap(void *addr, size_t length);
+}
+#endif
+
 // glibc exports its underlying malloc implementation under the name
 // __libc_malloc so that hooks like this can use it.
 extern "C" {
@@ -263,12 +273,6 @@ extern void *__libc_realloc(void *ptr, size_t size);
 extern void *__libc_calloc(size_t nmemb, size_t size);
 extern void *__libc_memalign(size_t boundary, size_t size);
 extern void __libc_free(void *ptr);
-
-extern void *__mmap(void *addr, size_t length, int prot, int flags,
-                    int fd, off_t offset);
-extern void *__mmap64(void *addr, size_t length, int prot, int flags,
-                      int fd, off64_t offset);
-extern int __munmap(void *addr, size_t length);
 
 #ifdef __PIC__
 #define FUNC(x) x
@@ -391,9 +395,10 @@ int FUNC(posix_memalign)(void **memptr, size_t alignment, size_t size) {
 
 #ifdef __PIC__
   if (!__real_posix_memalign)
-    if (!(__real_posix_memalign =
-        (__real_posix_memalign_t) dlsym(RTLD_NEXT, "posix_memalign")))
-      return -1;
+    if (!(*(void **) (&__real_posix_memalign) =
+        dlsym(RTLD_NEXT, "posix_memalign"))) {
+      return ELIBACC;
+    }
 #endif
 
   if (in_malloc)
@@ -416,12 +421,20 @@ void *FUNC(mmap)(void *addr, size_t length, int prot, int flags,
   const void *caller =
     __builtin_extract_return_addr(__builtin_return_address(0));
 
+#ifdef __PIC__
+  if (!__real_mmap)
+    if (!(*(void **) (&__real_mmap) = dlsym(RTLD_NEXT, "mmap"))) {
+      errno = ELIBACC;
+      return MAP_FAILED;
+    }
+#endif
+
   if (in_malloc)
-    return __mmap(addr, length, prot, flags, fd, offset);
+    return __real_mmap(addr, length, prot, flags, fd, offset);
 
   in_malloc = 1;
 
-  void *ptr = __mmap(addr, length, prot, flags, fd, offset);
+  void *ptr = __real_mmap(addr, length, prot, flags, fd, offset);
 
   if (ptr != MAP_FAILED)
     record_malloc(length, ptr, caller);
@@ -436,12 +449,20 @@ void *FUNC(mmap64)(void *addr, size_t length, int prot, int flags,
   const void *caller =
     __builtin_extract_return_addr(__builtin_return_address(0));
 
+#ifdef __PIC__
+  if (!__real_mmap64)
+    if (!(*(void **) (&__real_mmap64) = dlsym(RTLD_NEXT, "mmap64"))) {
+      errno = ELIBACC;
+      return MAP_FAILED;
+    }
+#endif
+
   if (in_malloc)
-    return __mmap64(addr, length, prot, flags, fd, offset);
+    return __real_mmap64(addr, length, prot, flags, fd, offset);
 
   in_malloc = 1;
 
-  void *ptr = __mmap64(addr, length, prot, flags, fd, offset);
+  void *ptr = __real_mmap64(addr, length, prot, flags, fd, offset);
 
   if (ptr != MAP_FAILED)
     record_malloc(length, ptr, caller);
@@ -455,14 +476,22 @@ int FUNC(munmap)(void *addr, size_t length) {
   const void *caller =
     __builtin_extract_return_addr(__builtin_return_address(0));
 
+#ifdef __PIC__
+  if (!__real_munmap)
+    if (!(*(void **) (&__real_munmap) = dlsym(RTLD_NEXT, "munmap"))) {
+      errno = ELIBACC;
+      return -1;
+    }
+#endif
+
   if (in_malloc)
-    return __munmap(addr, length);
+    return __real_munmap(addr, length);
 
   in_malloc = 1;
 
   record_free(addr, caller);
 
-  int r = __munmap(addr, length);
+  int r = __real_munmap(addr, length);
 
   in_malloc = 0;
 
