@@ -13,6 +13,7 @@
 #include <utility>
 
 #include <limits.h>
+#include <errno.h>
 #include <malloc.h>
 #include <execinfo.h>
 #include <sys/mman.h>
@@ -39,7 +40,7 @@ using namespace std;
 // Add to your LDFLAGS:
 //   -Wl,--wrap,malloc,--wrap,free,--wrap,realloc,--wrap,calloc,--wrap,memalign /path/to/memlog_s.o -lpthread -ldl
 
-FILE *log_file = 0;
+static FILE *log_file = 0;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // The malloc hook might use functions that call malloc, and we need to make
@@ -48,10 +49,12 @@ static __thread int in_malloc = 0;
 static char self_path[PATH_MAX+1] = { '\0' };
 
 #ifdef __bgq__
-int on_bgq = 0;
+static int on_bgq = 0;
 #endif
 
-void *initial_brk = 0;
+static void *initial_brk = 0;
+
+static unordered_map<void *, Dl_info> *dladdr_cache = 0;
 
 __attribute__((__constructor__))
 static void record_init() {
@@ -110,20 +113,24 @@ static void record_cleanup() {
 
   (void) fflush(log_file);
   (void) fclose(log_file);
+
+  if (dladdr_cache)
+    delete dladdr_cache;
 }
 
 // dladdr is, relatively, quit slow. For this to work on a large application,
 // we need to cache the lookup results.
 static int dladdr_cached(void * addr, Dl_info *info) {
-  static unordered_map<void *, Dl_info> dladdr_cache;
+  if (!dladdr_cache)
+    dladdr_cache = new unordered_map<void *, Dl_info>;
 
-  auto I = dladdr_cache.find(addr);
-  if (I == dladdr_cache.end()) {
+  auto I = dladdr_cache->find(addr);
+  if (I == dladdr_cache->end()) {
     int r;
     if (!(r = dladdr(addr, info)))
       memset(info, 0, sizeof(Dl_info));
 
-    dladdr_cache.insert(make_pair(addr, *info));
+    dladdr_cache->insert(make_pair(addr, *info));
     return r;
   }
 
@@ -245,13 +252,14 @@ done:
 }
 
 #ifdef __PIC__
-int (*__real_posix_memalign)(void **memptr, size_t alignment, size_t size) = 0;
+static int (*__real_posix_memalign)(void **memptr, size_t alignment,
+                                    size_t size) = 0;
 
-void *(*__real_mmap)(void *addr, size_t length, int prot, int flags,
-                     int fd, off_t offset) = 0;
-void *(*__real_mmap64)(void *addr, size_t length, int prot, int flags,
-                       int fd, off64_t offset) = 0;
-int (*__real_munmap)(void *addr, size_t length) = 0;
+static void *(*__real_mmap)(void *addr, size_t length, int prot, int flags,
+                            int fd, off_t offset) = 0;
+static void *(*__real_mmap64)(void *addr, size_t length, int prot, int flags,
+                              int fd, off64_t offset) = 0;
+static int (*__real_munmap)(void *addr, size_t length) = 0;
 #else
 extern "C" {
 extern int __real_posix_memalign(void **memptr, size_t alignment, size_t size);
