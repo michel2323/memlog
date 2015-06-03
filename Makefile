@@ -19,6 +19,7 @@ libmemlog.so: memlog.cpp
 
 install: all memlog_analyze README
 	cp -a libmemlog.so memlog_s.o memlog_analyze README $(DESTDIR)/
+	echo '-Wl,--wrap,malloc,--wrap,valloc,--wrap,realloc,--wrap,calloc,--wrap,memalign,--wrap,free,--wrap,posix_memalign,--wrap,mmap,--wrap,mmap64,--wrap,munmap $(DESTDIR)/memlog_s.o -lpthread -ldl' > $(DESTDIR)/memlog_s_ld_cmds
 
 clean:
 	rm -f memlog_s.o libmemlog.so

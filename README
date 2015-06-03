@@ -15,11 +15,22 @@ For dynamically-linked applications, you can:
  2. Link directly: Add the following to your linker flags:
       -L/path/to/memlog -Wl,-rpath,/path/to/memlog -lmemlog
 
-For statically-linked applications, add the following to your linker flags:
+For statically-linked applications ld's automatic wrapping functionality is
+employed, and the exact set of necessary flags is large, so a file named
+memlog_s_ld_cmds has been provided containing the necessary flags.
 
-  -Wl,--wrap,malloc,--wrap,valloc,--wrap,realloc,--wrap,calloc,--wrap,memalign,--wrap,free \
-    -Wl,--wrap,posix_memalign,--wrap,mmap,--wrap,mmap64,--wrap,munmap \
-    /path/to/memlog/memlog_s.o -lpthread -ldl
+To your linker flags add:
+
+  `cat /path/to/memlog/memlog_s_ld_cmds`
+
+or, if your compiler and wrappers support response files (gcc and clang do, for
+example), simply:
+
+  @/path/to/memlog/memlog_s_ld_cmds
+
+so your overall linking command might look something like this:
+
+  mpic++ -O3 -g -o my_program my_obj1.o my_obj2.o @/path/to/memlog/memlog_s_ld_cmds
 
 ** RUNNING **
 
