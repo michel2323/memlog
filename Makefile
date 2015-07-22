@@ -1,7 +1,9 @@
 CXX = /soft/compilers/bgclang/wbin/bgclang++
 CXXFLAGS = -std=gnu++0x -O3 -g
 
-CPPFLAGS =
+# When compiling with CXX=powerpc64-bgq-linux-g++, we need these:
+CPPFLAGS = -I/bgsys/drivers/ppcfloor -I/bgsys/drivers/ppcfloor/spi/include/kernel/cnk
+
 LDFLAGS = -lpthread -ldl
 
 # Set this to use the install target
@@ -15,8 +17,9 @@ memlog_s.o: memlog.cpp
 libmemlog.so: memlog.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LDFLAGS) -fPIC -shared -o libmemlog.so memlog.cpp
 
-install: all memlog2dot README
-	cp -a libmemlog.so memlog_s.o memlog2dot README $(DESTDIR)/
+install: all memlog_analyze README
+	cp -a libmemlog.so memlog_s.o memlog_analyze README $(DESTDIR)/
+	echo '-Wl,--wrap,malloc,--wrap,valloc,--wrap,realloc,--wrap,calloc,--wrap,memalign,--wrap,free,--wrap,posix_memalign,--wrap,mmap,--wrap,mmap64,--wrap,munmap $(DESTDIR)/memlog_s.o -lpthread -ldl' > $(DESTDIR)/memlog_s_ld_cmds
 
 clean:
 	rm -f memlog_s.o libmemlog.so

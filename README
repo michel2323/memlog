@@ -15,10 +15,22 @@ For dynamically-linked applications, you can:
  2. Link directly: Add the following to your linker flags:
       -L/path/to/memlog -Wl,-rpath,/path/to/memlog -lmemlog
 
-For statically-linked applications, add the following to your linker flags:
+For statically-linked applications ld's automatic wrapping functionality is
+employed, and the exact set of necessary flags is large, so a file named
+memlog_s_ld_cmds has been provided containing the necessary flags.
 
-  -Wl,--wrap,malloc,--wrap,free,--wrap,realloc,--wrap,calloc,--wrap,memalign \
-    /path/to/memlog/memlog_s.o -lpthread -ldl
+To your linker flags add:
+
+  `cat /path/to/memlog/memlog_s_ld_cmds`
+
+or, if your compiler and wrappers support response files (gcc and clang do, for
+example), simply:
+
+  @/path/to/memlog/memlog_s_ld_cmds
+
+so your overall linking command might look something like this:
+
+  mpic++ -O3 -g -o my_program my_obj1.o my_obj2.o @/path/to/memlog/memlog_s_ld_cmds
 
 ** RUNNING **
 
@@ -28,17 +40,37 @@ information, and are only somewhat human readable. You can create a ps/pdf
 file detailing the memory allocated when each process reached its peak memory
 use by running:
 
-  /path/to/memlog/memlog2dot /path/to/HOST.PID.memlog
+  /path/to/memlog/memlog_analyze /path/to/HOST.PID.memlog
 
 this will generate files named HOST.PID.memlog.dot, HOST.PID.memlog.ps and
 HOST.PID.memlog.pdf. You'll probably find the pdf file most convenient for
 viewing. HOST.PID.memlog.txt is also generated, providing the same information
 in textual form.
 
+If you pass the --leaks option to memlog_analyze, it will provide data on
+allocations active at the end of the program (leaks) instead of those active
+when the peak memory usage is first reached.
+
+You might have many runs of the same application (or output from many ranks of
+an MPI job), and you'd like to pick the one for analysis with the highest
+memory usage. If you provide a glob pattern to memlog_analyze it will do this
+for you. Make sure you quote the glob pattern so that your shell does not
+expand it.
+
+  /path/to/memlog/memlog_analyze "/path/to/*.memlog"
+
+When running under common batch systems, the files are named
+JOB_ID.HOST.PID.memlog, and when running under the BG/Q CNK, the process's rank
+is used instead of the node-local PID.
+
 Note that te peak memory usage is determined by monitoring the processes's
 maximum resident set size, not just the total allocated heap memory.
 
-memlog2dot depends on dot (from the graphviz package) and ps2pdf (from the
+memlog_analyze takes, as a second optional parameter, the name of the output
+directory (the current directory is the default). If the directory does not
+exist, it will be created.
+
+memlog_analyze depends on dot (from the graphviz package) and ps2pdf (from the
 ghostscript package), plus various tools from the binutils package.
 
 ** RELATED WORK **

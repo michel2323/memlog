@@ -44,6 +44,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 
 // NOTE: This source makes very minimal use of C++11 features. It can still be
 // compiled by g++ 4.4.7 with -std=gnu++0x.
@@ -51,8 +52,10 @@
 #include <utility>
 
 #include <limits.h>
+#include <errno.h>
 #include <malloc.h>
 #include <execinfo.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -65,13 +68,18 @@
 #include <pthread.h>
 #include <dlfcn.h>
 
+#ifdef __bgq__
+#include <spi/include/kernel/location.h>
+#include <spi/include/kernel/memory.h>
+#endif
+
 using namespace std;
 
 // NOTE: When static linking, this depends on linker wrapping.
 // Add to your LDFLAGS:
 //   -Wl,--wrap,malloc,--wrap,free,--wrap,realloc,--wrap,calloc,--wrap,memalign /path/to/memlog_s.o -lpthread -ldl
 
-FILE *log_file = NULL;
+static FILE *log_file = 0;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // The malloc hook might use functions that call malloc, and we need to make
@@ -79,19 +87,54 @@ static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static __thread int in_malloc = 0;
 static char self_path[PATH_MAX+1] = { '\0' };
 
+#ifdef __bgq__
+static int on_bgq = 0;
+#endif
+
+static void *initial_brk = 0;
+
+static unordered_map<void *, Dl_info> *dladdr_cache = 0;
+
 __attribute__((__constructor__))
 static void record_init() {
   struct utsname u;
   uname(&u);
 
+  int id = (int) getpid();
+#ifdef __bgq__
+  // If we're really running on a BG/Q compute node, use the job rank instead
+  // of the pid because the node name might not really be globally unique.
+  if (!strcmp(u.sysname, "CNK") && !strcmp(u.machine, "BGQ")) {
+    id = (int) Kernel_GetRank();
+    on_bgq = 1;
+  }
+#endif
+
+  // If we're running under a common batch system, add the job id to the output
+  // file names (add it as a prefix so that sorting the files will sort by job
+  // first).
+  char *job_id = 0;
+  const char *job_id_vars[] =
+    { "COBALT_JOBID", "PBS_JOBID", "SLURM_JOB_ID", "JOB_ID" };
+  for (int i = 0; i < sizeof(job_id_vars)/sizeof(job_id_vars[0]); ++i) {
+    job_id = getenv(job_id_vars[i]);
+    if (job_id)
+      break;
+  }
+
   char log_name[PATH_MAX+1];
-  snprintf(log_name, PATH_MAX+1, "%s.%d.memlog", u.nodename, getpid());
+  if (job_id)
+    snprintf(log_name, PATH_MAX+1, "%s.%s.%d.memlog", job_id, u.nodename, id);
+  else
+    snprintf(log_name, PATH_MAX+1, "%s.%d.memlog", u.nodename, id);
   log_file = fopen(log_name, "w");
   if (!log_file)
     fprintf(stderr, "fopen failed for '%s': %m\n", log_name);
 
   const char *link_name = "/proc/self/exe";
   readlink(link_name, self_path, PATH_MAX);
+
+  initial_brk = sbrk(0);
 }
 
 __attribute__((__destructor__))
@@ -109,20 +152,24 @@ static void record_cleanup() {
 
   (void) fflush(log_file);
   (void) fclose(log_file);
+
+  if (dladdr_cache)
+    delete dladdr_cache;
 }
 
 // dladdr is, relatively, quit slow. For this to work on a large application,
 // we need to cache the lookup results.
 static int dladdr_cached(void * addr, Dl_info *info) {
-  static unordered_map<void *, Dl_info> dladdr_cache;
+  if (!dladdr_cache)
+    dladdr_cache = new unordered_map<void *, Dl_info>;
 
-  auto I = dladdr_cache.find(addr);
-  if (I == dladdr_cache.end()) {
+  auto I = dladdr_cache->find(addr);
+  if (I == dladdr_cache->end()) {
     int r;
     if (!(r = dladdr(addr, info)))
       memset(info, 0, sizeof(Dl_info));
 
-    dladdr_cache.insert(make_pair(addr, *info));
+    dladdr_cache->insert(make_pair(addr, *info));
     return r;
   }
 
@@ -139,6 +186,17 @@ static void print_context(const void *caller, int show_backtrace) {
 
   fprintf(log_file, "\t%ld.%06ld %ld %ld", usage.ru_utime.tv_sec,
           usage.ru_utime.tv_usec, usage.ru_maxrss, syscall(SYS_gettid));
+
+  // Some other memory stats (like with maxrss, report these in KB).
+  size_t arena_size = ((size_t) sbrk(0)) - (size_t) initial_brk;
+
+  uint64_t mmap_size = 0;
+#ifdef __bgq__
+  if (on_bgq)
+    (void) Kernel_GetMemorySize(KERNEL_MEMSIZE_MMAP, &mmap_size);
+#endif
+
+  fprintf(log_file, " %ld %ld", arena_size >> 10, mmap_size >> 10);
 
   if (!show_backtrace)
     return;
@@ -232,10 +290,32 @@ done:
   pthread_mutex_unlock(&log_mutex);
 }
 
+#ifdef __PIC__
+static int (*__real_posix_memalign)(void **memptr, size_t alignment,
+                                    size_t size) = 0;
+
+static void *(*__real_mmap)(void *addr, size_t length, int prot, int flags,
+                            int fd, off_t offset) = 0;
+static void *(*__real_mmap64)(void *addr, size_t length, int prot, int flags,
+                              int fd, off64_t offset) = 0;
+static int (*__real_munmap)(void *addr, size_t length) = 0;
+#else
+extern "C" {
+extern int __real_posix_memalign(void **memptr, size_t alignment, size_t size);
+
+extern void *__real_mmap(void *addr, size_t length, int prot, int flags,
+                         int fd, off_t offset);
+extern void *__real_mmap64(void *addr, size_t length, int prot, int flags,
+                           int fd, off64_t offset);
+extern int __real_munmap(void *addr, size_t length);
+}
+#endif
+
 // glibc exports its underlying malloc implementation under the name
 // __libc_malloc so that hooks like this can use it.
 extern "C" {
 extern void *__libc_malloc(size_t size);
+extern void *__libc_valloc(size_t size);
 extern void *__libc_realloc(void *ptr, size_t size);
 extern void *__libc_calloc(size_t nmemb, size_t size);
 extern void *__libc_memalign(size_t boundary, size_t size);
@@ -257,8 +337,25 @@ void *FUNC(malloc)(size_t size) {
   in_malloc = 1;
 
   void *ptr = __libc_malloc(size);
+  if (ptr)
+    record_malloc(size, ptr, caller);
 
-  record_malloc(size, ptr, caller);
+  in_malloc = 0;
+  return ptr;
+}
+
+void *FUNC(valloc)(size_t size) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+  if (in_malloc)
+    return __libc_valloc(size);
+
+  in_malloc = 1;
+
+  void *ptr = __libc_valloc(size);
+  if (ptr)
+    record_malloc(size, ptr, caller);
 
   in_malloc = 0;
   return ptr;
@@ -277,7 +374,8 @@ void *FUNC(realloc)(void *ptr, size_t size) {
 
   if (ptr)
     record_free(ptr, caller);
-  record_malloc(size, nptr, caller);
+  if (nptr)
+    record_malloc(size, nptr, caller);
 
   in_malloc = 0;
 
@@ -295,7 +393,8 @@ void *FUNC(calloc)(size_t nmemb, size_t size) {
 
   void *ptr = __libc_calloc(nmemb, size);
 
-  record_malloc(nmemb*size, ptr, caller);
+  if (ptr)
+    record_malloc(nmemb*size, ptr, caller);
 
   in_malloc = 0;
 
@@ -313,7 +412,8 @@ void *FUNC(memalign)(size_t boundary, size_t size) {
 
   void *ptr = __libc_memalign(boundary, size);
 
-  record_malloc(size, ptr, caller);
+  if (ptr)
+    record_malloc(size, ptr, caller);
 
   in_malloc = 0;
 
@@ -334,6 +434,115 @@ void FUNC(free)(void *ptr) {
   __libc_free(ptr);
 
   in_malloc = 0;
+}
+
+int FUNC(posix_memalign)(void **memptr, size_t alignment, size_t size) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+#ifdef __PIC__
+  if (!__real_posix_memalign)
+    if (!(*(void **) (&__real_posix_memalign) =
+        dlsym(RTLD_NEXT, "posix_memalign"))) {
+      return ELIBACC;
+    }
+#endif
+
+  if (in_malloc)
+    return __real_posix_memalign(memptr, alignment, size);
+
+  in_malloc = 1;
+
+  int r = __real_posix_memalign(memptr, alignment, size);
+
+  if (!r)
+    record_malloc(size, *memptr, caller);
+
+  in_malloc = 0;
+
+  return r;
+}
+
+void *FUNC(mmap)(void *addr, size_t length, int prot, int flags,
+                 int fd, off_t offset) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+#ifdef __PIC__
+  if (!__real_mmap)
+    if (!(*(void **) (&__real_mmap) = dlsym(RTLD_NEXT, "mmap"))) {
+      errno = ELIBACC;
+      return MAP_FAILED;
+    }
+#endif
+
+  if (in_malloc)
+    return __real_mmap(addr, length, prot, flags, fd, offset);
+
+  in_malloc = 1;
+
+  void *ptr = __real_mmap(addr, length, prot, flags, fd, offset);
+
+  if (ptr != MAP_FAILED)
+    record_malloc(length, ptr, caller);
+
+  in_malloc = 0;
+
+  return ptr;
+}
+
+void *FUNC(mmap64)(void *addr, size_t length, int prot, int flags,
+                   int fd, off64_t offset) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+#ifdef __PIC__
+  if (!__real_mmap64)
+    if (!(*(void **) (&__real_mmap64) = dlsym(RTLD_NEXT, "mmap64"))) {
+      errno = ELIBACC;
+      return MAP_FAILED;
+    }
+#endif
+
+  if (in_malloc)
+    return __real_mmap64(addr, length, prot, flags, fd, offset);
+
+  in_malloc = 1;
+
+  void *ptr = __real_mmap64(addr, length, prot, flags, fd, offset);
+
+  if (ptr != MAP_FAILED)
+    record_malloc(length, ptr, caller);
+
+  in_malloc = 0;
+
+  return ptr;
+}
+
+int FUNC(munmap)(void *addr, size_t length) {
+  const void *caller =
+    __builtin_extract_return_addr(__builtin_return_address(0));
+
+#ifdef __PIC__
+  if (!__real_munmap)
+    if (!(*(void **) (&__real_munmap) = dlsym(RTLD_NEXT, "munmap"))) {
+      errno = ELIBACC;
+      return -1;
+    }
+#endif
+
+  if (in_malloc)
+    return __real_munmap(addr, length);
+
+  in_malloc = 1;
+
+  record_free(addr, caller);
+
+  int r = __real_munmap(addr, length);
+
+  in_malloc = 0;
+
+  return r;
 }
 
 } // extern "C"

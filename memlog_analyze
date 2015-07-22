@@ -41,16 +41,85 @@
 
 use strict;
 use File::Basename;
+use File::Path qw(make_path);
+use Getopt::Long;
+
+my $find_leaks = 0;
+my $print_raw_proc_name = 0;
+my $quiet = 0;
+my $help = 0;
+
+sub print_usage($) {
+  my $ec = $_[0];
+  my $usage = <<EOM;
+Usage: $0 [options] <memlog file or glob> [<output directory>]
+  options:
+    --leaks
+      Provide information on leaks instead of peak usage
+    --print-symbol-names
+      Include symbol names and offsets in the output
+    --quiet or -q
+      Don't print status messages while running
+EOM
+
+  print $usage;
+  exit($ec);
+}
+
+GetOptions("help|h|?" => \$help,
+           "leaks" => \$find_leaks,
+           "print-symbol-names" => \$print_raw_proc_name,
+           "quiet|q" => \$quiet)
+  or print_usage(1);
+
+if ($help) {
+  print_usage(0);
+}
+
+if (scalar(@ARGV) > 2) {
+  print_usage(2);
+}
 
 my $memlog_fn = $ARGV[0];
 my $out_dir = $ARGV[1] || '.';
 
-my $print_raw_proc_name = 0;
+make_path($out_dir);
 
 if (! -f $memlog_fn) {
-  print "Usage: $0 <memlog file> [<output directory>]\n";
-  exit 1;
+  my @pot_fns = glob($memlog_fn);
+  if (scalar(@pot_fns)) {
+    if (!$quiet) {
+      print "Searching all files matching '$memlog_fn'\n";
+    }
+
+    my $pot_max_rss = 0;
+    my $pos_max_rss_fn;
+    foreach my $pot_fn (@pot_fns) {
+      my $last_line = `tail -n 1 '$pot_fn'`;
+      chomp($last_line);
+
+      my @parts = split(/\t/, $last_line);
+
+      my $op = shift(@parts);
+      my $state = shift(@parts);
+
+      my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+        split(/\s+/, $state);
+      if ($pot_max_rss < $then_max_rss) {
+        $pot_max_rss = $then_max_rss;
+        $pos_max_rss_fn = $pot_fn;
+      }
+    }
+
+    if (defined $pos_max_rss_fn) {
+      $memlog_fn = $pos_max_rss_fn;
+      goto have_memlog_fn;
+    }
+  }
+
+  print_usage(1);
 }
+have_memlog_fn:
 
 # The version of addr2line and friends that you use can make a big difference,
 # especially on BE ppc64, where older versions of addr2line did not account
@@ -65,6 +134,8 @@ open(MEMLOG, $memlog_fn) || die "Can't open $memlog_fn: $!";
 
 # The first step is to determine the high-water mark.
 my $max_rss = 0;
+my $arena = 0;
+my $mmap = 0;
 foreach my $line (<MEMLOG>) {
   chomp($line);
   my @parts = split(/\t/, $line);
@@ -72,9 +143,12 @@ foreach my $line (<MEMLOG>) {
   my $op = shift(@parts);
   my $state = shift(@parts);
 
-  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+  my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+    split(/\s+/, $state);
   if ($max_rss < $then_max_rss) {
     $max_rss = $then_max_rss;
+    $arena = $then_arena;
+    $mmap = $then_mmap;
   }
 }
 
@@ -82,7 +156,8 @@ seek(MEMLOG, 0, 0);
 
 # Scan the log for malloc/free pairings. We're interested only in active
 # allocations at the time when the rss reaches the final maxrss.
-my $max_rss_time = 0;
+# If we're finding leaks, then go to the very end.
+my $active_alloc_time = 0;
 my %malloc_lines;
 foreach my $line (<MEMLOG>) {
   chomp($line);
@@ -101,11 +176,15 @@ foreach my $line (<MEMLOG>) {
     next;
   }
 
-  # If we've reached the max rss, we've seen all we need to see.
-  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
-  $max_rss_time = $time;
-  if ($then_max_rss == $max_rss) {
-    last;
+  my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+    split(/\s+/, $state);
+  $active_alloc_time = $time;
+
+  if (!$find_leaks) {
+    # If we've reached the max rss, we've seen all we need to see.
+    if ($then_max_rss == $max_rss) {
+      last;
+    }
   }
 }
 
@@ -113,6 +192,12 @@ close(MEMLOG);
 
 # Convert maxrss, currently in KB, to bytes.
 $max_rss *= 1024;
+if (defined $arena) {
+  $arena *= 1024;
+}
+if (defined $mmap) {
+  $mmap *= 1024;
+}
 
 my $total_size = 0;
 my %roots;
@@ -129,7 +214,8 @@ foreach my $line (values %malloc_lines) {
   }
 
   my ($size, $ptr) = ($op =~ /^M: (\d+) 0x(\w+)/);
-  my ($time, $then_max_rss, $tid) = split(/\s+/, $state);
+  my ($time, $then_max_rss, $tid, $then_arena, $then_mmap) =
+    split(/\s+/, $state);
 
   $total_size += $size;
 
@@ -191,7 +277,16 @@ my $dot_fn = "$out_dir/" . basename($memlog_fn) . ".dot";
 my $ps_fn = "$out_dir/" . basename($memlog_fn) . ".ps";
 my $pdf_fn = "$out_dir/" . basename($memlog_fn) . ".pdf";
 
+if (!$quiet) {
+  print "Creating $txt_fn\n";
+}
+
 open(TXT, ">$txt_fn") || die "Can't open $txt_fn: $!";
+
+if (!$quiet) {
+  print "Creating $dot_fn\n";
+}
+
 open(DOT, ">$dot_fn") || die "Can't open $dot_fn: $!";
 
 sub format_bytes($) {
@@ -207,16 +302,32 @@ sub format_bytes($) {
   return sprintf("%.3f $sizes[$i]", $size);
 }
 
+sub format_bytes_or_unk($) {
+  my $b = $_[0];
+  return defined($b) ? format_bytes($b) : "(unknown)";
+}
+
 print DOT ("digraph \"memlog\" {\n");
 print DOT ("size=\"8,11\";\n");
 print DOT ("node [width=0.375,height=0.25];\n");
 
-printf DOT ("Legend [shape=box, fontsize=100, shape=oval," .
-            "label=\"Total: %s active at maxrss = %s after %s s\"];\n",
-            format_bytes($total_size), format_bytes($max_rss), $max_rss_time);
+my $find_type = $find_leaks ? " (leaks)" : "";
+print DOT "subgraph cluster_key {\n";
+print DOT "\trank=min;\n";
+print DOT "\tlabel=\"memlog\";\n";
+print DOT "\tfontsize=100;\n";
+print DOT "\trankdir=UR;\n";
+printf DOT ("Legend [shape=box, fontsize=100, shape=plaintext," .
+            "label=\"Total: %s active$find_type at maxrss = %s after %s s\\narena: %s\\nmmap: %s\"];\n",
+            format_bytes($total_size), format_bytes($max_rss),
+            $active_alloc_time, format_bytes_or_unk($arena),
+            format_bytes_or_unk($mmap));
+print DOT "}\n";
 
-printf TXT ("memlog: Total: %s active at maxrss = %s after %s s\n\n",
-            format_bytes($total_size), format_bytes($max_rss), $max_rss_time);
+printf TXT ("memlog: Total: %s active$find_type at maxrss = %s after %s s\n\tarena: %s\tmmap: %s\n\n",
+            format_bytes($total_size), format_bytes($max_rss),
+            $active_alloc_time, format_bytes_or_unk($arena),
+            format_bytes_or_unk($mmap));
 
 my %cached_names;
 sub get_name($) {
@@ -276,7 +387,7 @@ sub get_name($) {
 
     $ret .= $func . '\n';
 
-    if ($loc !~ /^\?/) {
+    if ($loc !~ /^[:?]/) {
       $ret .= $loc . '\n';
     }
   } elsif ($node->{'proc_name'} ne '?') {
@@ -394,7 +505,16 @@ foreach my $pc (sort { $all_nodes{$::b}->{'size'} <=>
 close(TXT);
 close(DOT);
 
+if (!$quiet) {
+  print "Creating $ps_fn\n";
+}
+
 system("dot -Tps2 < '$dot_fn' > '$ps_fn'");
+
+if (!$quiet) {
+  print "Creating $pdf_fn\n";
+}
+
 system("ps2pdf '$ps_fn' '$pdf_fn'");
 
 exit 0;
